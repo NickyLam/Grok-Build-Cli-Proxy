@@ -11,8 +11,9 @@
   <a href="#quick-start">Quick start</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#api-essentials">API</a> ·
+  <a href="#client-integration--e2e">Clients</a> ·
   <a href="#security">Security</a> ·
-  <a href="docs/UPGRADE-0.2.md">Upgrade</a> ·
+  <a href="docs/clients/README.md">Integration guide</a> ·
   <a href="docs/ACP.md">ACP</a>
 </p>
 
@@ -286,6 +287,24 @@ uv run pytest -q -m "not grok_e2e"
 ```
 
 ---
+
+## Client integration & E2E
+
+| Guide | Description |
+|-------|-------------|
+| [docs/clients/README.md](docs/clients/README.md) | Index + env setup |
+| [docs/clients/curl.md](docs/clients/curl.md) | HTTP / curl |
+| [docs/clients/openai-sdk.md](docs/clients/openai-sdk.md) | OpenAI Python SDK |
+| [docs/clients/workbuddy.md](docs/clients/workbuddy.md) | WorkBuddy custom model |
+| [docs/clients/codex-mcp.md](docs/clients/codex-mcp.md) | Codex / Qoder / CodeBuddy MCP |
+
+```bash
+./scripts/e2e_all.sh                 # MCP + ACP + unit tests (+ HTTP if proxy up)
+./scripts/e2e_http.sh                # needs: uv run grok-proxy
+E2E_LIVE_PROMPT=1 ./scripts/e2e_http.sh   # optional live Grok call
+./scripts/e2e_mcp.sh
+./scripts/e2e_acp.sh
+```
 
 ## Docs
 

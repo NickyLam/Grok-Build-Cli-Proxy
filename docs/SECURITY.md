@@ -16,7 +16,8 @@ Assume:
 | Auth | Bearer required |
 | Workspace | `read_only` preferred |
 | `in_place` | disabled |
-| Always-approve | server default (often true for headless CI) |
+| Always-approve | default **false**; Headless backend still forces approve (`grok -p`) |
+| Public bind | rejected unless `GROK_PROXY_ALLOW_PUBLIC_BIND=1` |
 | Key storage | SHA-256 hash + pepper |
 | Prompt argv | use `--prompt-file` |
 
