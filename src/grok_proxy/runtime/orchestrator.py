@@ -778,17 +778,21 @@ class ResponseOrchestrator:
         live = self._runs.get(response_id)
         if not live:
             return
-        if live.workspace is not None:
-            self.workspace.release(live.workspace, response_id)
-            if not keep_workspace:
-                failed = False
-                try:
-                    rec = await self.get_async(response_id)
-                    failed = rec.status == ResponseStatus.FAILED.value
-                except ProxyError:
-                    failed = True
-                self.workspace.cleanup(live.workspace, keep_on_failure=failed)
-            live.workspace = None
+        # Claim the allocation before any await: cancel() and _execute's finally
+        # can run concurrently, and the loser must see None and no-op.
+        alloc = live.workspace
+        if alloc is None:
+            return
+        live.workspace = None
+        self.workspace.release(alloc, response_id)
+        if not keep_workspace:
+            failed = False
+            try:
+                rec = await self.get_async(response_id)
+                failed = rec.status == ResponseStatus.FAILED.value
+            except ProxyError:
+                failed = True
+            self.workspace.cleanup(alloc, keep_on_failure=failed)
 
     async def _wait_terminal(self, response_id: str, *, timeout: float) -> None:
         live = self._runs.get(response_id)
