@@ -43,6 +43,10 @@ markers = [
   "grok_e2e: requires real grok binary",
   "client_compat: client compatibility checks",
 ]
+# Starlette still re-exports TestClient via httpx; httpx2 is not a published package yet.
+filterwarnings = [
+  "ignore:Using `httpx` with `starlette.testclient` is deprecated:starlette.exceptions.StarletteDeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 100
