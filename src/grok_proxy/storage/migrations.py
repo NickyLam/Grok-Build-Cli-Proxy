@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 MIGRATIONS: dict[int, str] = {
     1: """
@@ -134,6 +134,13 @@ MIGRATIONS: dict[int, str] = {
     -- Scoped API key extensions
     ALTER TABLE api_keys ADD COLUMN workspace_mode TEXT;
     ALTER TABLE api_keys ADD COLUMN revoked_at REAL;
+    """,
+    3: """
+    -- Server-side metadata (e.g. api key hash pepper)
+    CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
     """,
 }
 

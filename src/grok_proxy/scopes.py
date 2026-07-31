@@ -53,7 +53,7 @@ ROUTE_SCOPES: dict[str, set[str]] = {
     "POST /v1/chat/completions": {Scope.RESPONSE_CREATE.value},
     "GET /v1/models": set(),  # any authenticated
     "GET /v1/health": set(),
-    "GET /v1/connection": set(),
+    "GET /v1/connection": set(),  # master-only (enforced in handler; payload holds master key)
     "GET /v1/keys": {Scope.ADMIN_KEYS.value},
     "POST /v1/keys": {Scope.ADMIN_KEYS.value},
     "DELETE /v1/keys": {Scope.ADMIN_KEYS.value},

@@ -48,8 +48,30 @@ def generate_api_key() -> str:
 def _chmod_private(path: Path) -> None:
     try:
         path.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0o600
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.warning("could not restrict permissions on %s: %s", path, exc)
+
+
+def mask_api_key(key: str) -> str:
+    """Shorten a key for display: keep prefix + last 4 chars."""
+    if len(key) <= 14:
+        return "[hidden]"
+    return f"{key[:10]}…{key[-4:]}"
+
+
+def workbuddy_model_entry(*, api_key: str, base_url: str, model_id: str) -> dict:
+    """Model entry shape used by ~/.workbuddy/models.json (single source of truth)."""
+    return {
+        "id": model_id,
+        "name": model_id,
+        "vendor": "Custom",
+        "url": base_url,
+        "apiKey": api_key,
+        "supportsToolCall": False,
+        "supportsImages": False,
+        "supportsReasoning": False,
+        "useCustomProtocol": False,
+    }
 
 
 def load_persisted_api_key(state_dir: Path | None = None) -> str | None:
@@ -180,17 +202,9 @@ def write_client_config_files(
     written["client_config"] = client_path
 
     # WorkBuddy models.json entry shape (matches ~/.workbuddy/models.json)
-    workbuddy_entry = {
-        "id": info.model_id,
-        "name": info.model_id,
-        "vendor": "Custom",
-        "url": info.base_url,
-        "apiKey": info.api_key,
-        "supportsToolCall": False,
-        "supportsImages": False,
-        "supportsReasoning": False,
-        "useCustomProtocol": False,
-    }
+    workbuddy_entry = workbuddy_model_entry(
+        api_key=info.api_key, base_url=info.base_url, model_id=info.model_id
+    )
     wb_path = state_dir / "workbuddy-model.json"
     wb_path.write_text(
         json.dumps(workbuddy_entry, indent=2, ensure_ascii=False) + "\n",
@@ -249,24 +263,17 @@ def install_workbuddy_model(
             if e.get("id") not in drop and e.get("name") not in drop
         ]
 
-    entry = {
-        "id": info.model_id,
-        "name": info.model_id,
-        "vendor": "Custom",
-        "url": info.base_url,
-        "apiKey": info.api_key,
-        "supportsToolCall": False,
-        "supportsImages": False,
-        "supportsReasoning": False,
-        "useCustomProtocol": False,
-    }
+    entry = workbuddy_model_entry(
+        api_key=info.api_key, base_url=info.base_url, model_id=info.model_id
+    )
 
     replaced = False
     for i, e in enumerate(entries):
         same_id = e.get("id") == info.model_id or e.get("name") == info.model_id
+        url = e.get("url")
         same_proxy = (
-            isinstance(e.get("url"), str)
-            and e.get("url").rstrip("/") == info.base_url.rstrip("/")
+            isinstance(url, str)
+            and url.rstrip("/") == info.base_url.rstrip("/")
             and e.get("vendor") == "Custom"
         )
         if same_id or same_proxy:
@@ -295,35 +302,33 @@ def format_startup_banner(
     *,
     written: dict[str, Path] | None = None,
     workbuddy_installed: Path | None = None,
+    show_full_key: bool = False,
 ) -> str:
+    # Never print the plaintext key by default; point to the key file instead
+    # (set GROK_PROXY_BANNER_SHOW_KEY=1 to restore the old behaviour).
+    display_key = info.api_key if show_full_key else mask_api_key(info.api_key)
+    key_file = (written or {}).get("api_key") or (default_state_dir() / "api_key")
     lines = [
         "",
         "=" * 60,
         "  Grok Build CLI Proxy is ready (OpenAI-compatible)",
         "=" * 60,
         f"  Base URL : {info.base_url}",
-        f"  API Key  : {info.api_key}",
+        f"  API Key  : {display_key}",
         f"  Model ID : {info.model_id}",
         f"  Key source: {info.source}",
+        f"  Full key : {key_file}  (GROK_PROXY_BANNER_SHOW_KEY=1 to print)",
         "",
         "  WorkBuddy / any OpenAI-compatible client:",
         f"    url    = {info.base_url}",
-        f"    apiKey = {info.api_key}",
+        f"    apiKey = {display_key}",
         f"    model  = {info.model_id}",
         "",
         "  WorkBuddy models.json entry:",
         "  " + json.dumps(
-            {
-                "id": info.model_id,
-                "name": info.model_id,
-                "vendor": "Custom",
-                "url": info.base_url,
-                "apiKey": info.api_key,
-                "supportsToolCall": False,
-                "supportsImages": False,
-                "supportsReasoning": False,
-                "useCustomProtocol": False,
-            },
+            workbuddy_model_entry(
+                api_key=display_key, base_url=info.base_url, model_id=info.model_id
+            ),
             ensure_ascii=False,
         ),
     ]

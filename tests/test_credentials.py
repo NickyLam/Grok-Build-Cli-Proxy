@@ -9,9 +9,11 @@ from grok_proxy.credentials import (
     API_KEY_PREFIX,
     build_connection_info,
     ensure_api_key,
+    format_startup_banner,
     generate_api_key,
     install_workbuddy_model,
     load_persisted_api_key,
+    mask_api_key,
     write_client_config_files,
 )
 
@@ -20,6 +22,30 @@ def test_generate_api_key_prefix():
     key = generate_api_key()
     assert key.startswith(API_KEY_PREFIX)
     assert len(key) > len(API_KEY_PREFIX) + 16
+
+
+def test_mask_api_key():
+    key = "sk-gp-abcdefghijklmnopqrstuvwxyz1234"
+    masked = mask_api_key(key)
+    assert masked != key
+    assert masked.startswith("sk-gp-")
+    assert masked.endswith(key[-4:])
+    assert len(masked) < len(key)
+    assert mask_api_key("short") == "[hidden]"
+
+
+def test_banner_masks_key_by_default():
+    key = generate_api_key()
+    info = build_connection_info(
+        api_key=key, host="127.0.0.1", port=8787, model_id="grok-4.5", source="generated"
+    )
+    banner = format_startup_banner(info)
+    assert key not in banner  # plaintext never printed by default
+    assert mask_api_key(key) in banner
+    assert "GROK_PROXY_BANNER_SHOW_KEY" in banner
+
+    full = format_startup_banner(info, show_full_key=True)
+    assert key in full
 
 
 def test_ensure_generates_and_persists(tmp_path: Path):

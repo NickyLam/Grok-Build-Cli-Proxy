@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
+
+# NOTE: this engine is a best-effort guardrail against obviously destructive
+# actions. Pattern matching cannot catch indirection (variables, base64,
+# nested shells) — it must never replace human approval for untrusted input.
 
 DecisionAction = Literal["allow", "deny", "ask"]
 
@@ -14,6 +19,7 @@ class PolicyRule:
     category: str | None = None  # shell, file_write, network, mcp, read
     path_glob: str | None = None
     command_glob: str | None = None
+    command_regex: str | None = None
     domain_glob: str | None = None
     mcp_tool_glob: str | None = None
     risk: str | None = None
@@ -39,10 +45,25 @@ class PolicyEvaluation:
 
 DEFAULT_POLICY = PolicyConfig(
     hard_deny=[
-        PolicyRule(action="deny", command_glob="rm -rf /*"),
-        PolicyRule(action="deny", command_glob="rm -rf /"),
-        PolicyRule(action="deny", command_glob="mkfs*"),
+        # Recursive/any rm of root or home (covers -rf/-fr/-r -f, ~, $HOME, trailing flags)
+        PolicyRule(
+            action="deny",
+            command_regex=(
+                r"^(?:sudo\s+)?rm\s+(?:-{1,2}[\w-]+\s+)*"
+                r"(?:/|/\*|~|~/|\$HOME/?)(?:\s+-{1,2}[\w-]+)*\s*$"
+            ),
+        ),
+        PolicyRule(action="deny", command_regex=r"^(?:sudo\s+)?mkfs"),
         PolicyRule(action="deny", command_glob="dd if=*"),
+        PolicyRule(action="deny", command_regex=r"^(?:sudo\s+)?dd\s+.*\bof=/dev/"),
+        # Fork bomb
+        PolicyRule(action="deny", command_regex=r":\(\)\s*\{"),
+        # Pipe remote script straight into a shell
+        PolicyRule(
+            action="deny",
+            command_regex=r"\b(?:curl|wget)\s+[^|;&]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b",
+        ),
+        PolicyRule(action="deny", command_regex=r"^(?:sudo\s+)?chmod\s+(?:-[\w]+\s+)*777\s+/\s*$"),
         PolicyRule(action="deny", path_glob="~/.ssh/*"),
         PolicyRule(action="deny", path_glob="**/id_rsa*"),
         PolicyRule(action="deny", path_glob="**/.env"),
@@ -83,6 +104,8 @@ class PolicyEngine:
     ) -> PolicyEvaluation:
         arguments = arguments or {}
         command = str(arguments.get("command") or arguments.get("cmd") or "")
+        # Normalize whitespace so "rm  -rf   /" cannot dodge patterns
+        command = " ".join(command.split())
         path = str(arguments.get("path") or arguments.get("file") or "")
         domain = str(arguments.get("domain") or arguments.get("url") or "")
         mcp_tool = str(arguments.get("tool") or arguments.get("mcp_tool") or "")
@@ -138,13 +161,13 @@ class PolicyEngine:
             return False
         if rule.risk and rule.risk != risk:
             return False
+        if rule.command_regex and not re.search(rule.command_regex, command):
+            return False
         if rule.command_glob and not fnmatch.fnmatch(command, rule.command_glob):
             # also try regex-ish prefix for shell
             if not re.match(fnmatch.translate(rule.command_glob), command):
                 return False
-        if rule.path_glob and not (
-            fnmatch.fnmatch(path, rule.path_glob) or fnmatch.fnmatch(path, rule.path_glob.replace("**/", ""))
-        ):
+        if rule.path_glob and not PolicyEngine._path_matches(path, rule.path_glob):
             return False
         if rule.domain_glob and not fnmatch.fnmatch(domain, rule.domain_glob):
             return False
@@ -152,9 +175,31 @@ class PolicyEngine:
             return False
         # category-only rule
         if not any(
-            [rule.command_glob, rule.path_glob, rule.domain_glob, rule.mcp_tool_glob, rule.risk]
+            [
+                rule.command_glob,
+                rule.command_regex,
+                rule.path_glob,
+                rule.domain_glob,
+                rule.mcp_tool_glob,
+                rule.risk,
+            ]
         ) and rule.category:
             return rule.category == category
-        if rule.command_glob or rule.path_glob or rule.domain_glob or rule.mcp_tool_glob:
+        if (
+            rule.command_glob
+            or rule.command_regex
+            or rule.path_glob
+            or rule.domain_glob
+            or rule.mcp_tool_glob
+        ):
             return True
         return bool(rule.category)
+
+    @staticmethod
+    def _path_matches(path: str, glob: str) -> bool:
+        """Glob match with ~ expansion on both sides."""
+        if not path:
+            return False
+        candidates = {path, os.path.expanduser(path)}
+        globs = {glob, os.path.expanduser(glob), glob.replace("**/", "")}
+        return any(fnmatch.fnmatch(p, g) for p in candidates for g in globs)

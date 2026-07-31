@@ -120,3 +120,26 @@ def test_approver_key_cannot_create(tmp_path):
             json={"input": "x", "x_grok": {"cwd": str(tmp_path)}},
         )
         assert r2.status_code == 403
+
+
+def test_connection_endpoint_master_only(tmp_path):
+    """/v1/connection returns the plaintext master key — scoped keys must get 403."""
+    app = _app(tmp_path)
+    with TestClient(app) as client:
+        r = client.post(
+            "/v1/keys",
+            headers={"Authorization": "Bearer master-secret-key"},
+            json={"name": "agent", "scopes": list(DEFAULT_AGENT_SCOPES), "test": True},
+        )
+        raw = r.json()["api_key"]
+
+        denied = client.get("/v1/connection", headers={"Authorization": f"Bearer {raw}"})
+        assert denied.status_code == 403
+        assert denied.json()["error"]["code"] == "master_only"
+        assert "master-secret-key" not in denied.text
+
+        ok = client.get(
+            "/v1/connection", headers={"Authorization": "Bearer master-secret-key"}
+        )
+        assert ok.status_code == 200
+        assert ok.json()["api_key"] == "master-secret-key"

@@ -81,7 +81,12 @@ def bootstrap_settings(
         # Remove stale entry that used invalid id "grok-build"
         wb_path = install_workbuddy_model(info, remove_ids=["grok-build", "grok-build-plan"])
 
-    banner = format_startup_banner(info, written=written, workbuddy_installed=wb_path)
+    banner = format_startup_banner(
+        info,
+        written=written,
+        workbuddy_installed=wb_path,
+        show_full_key=cfg.banner_show_key,
+    )
     # Append model discovery note
     extra = (
         f"\n  Grok CLI models ({runtime.source}): {', '.join(runtime.available) or '(none)'}\n"

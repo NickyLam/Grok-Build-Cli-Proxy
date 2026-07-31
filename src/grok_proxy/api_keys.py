@@ -13,11 +13,37 @@ from grok_proxy.storage.database import Database, new_id
 
 KeyPrefix = Literal["gp_live_", "gp_test_"]
 
+# Meta key under which the hash pepper is persisted in the database.
+PEPPER_META_KEY = "api_key_pepper"
+
 
 def hash_api_key(raw_key: str, *, pepper: str = "") -> str:
     """Store only a keyed hash of the secret (never plaintext)."""
     material = f"{pepper}{raw_key}".encode()
     return hashlib.sha256(material).hexdigest()
+
+
+# Pre-computed hash of an unguessable value; compared against candidate hashes
+# on lookup misses so the miss path does similar work to the hit path.
+_DUMMY_HASH = hash_api_key(secrets.token_urlsafe(32))
+
+
+def get_or_create_pepper(db: Database, *, legacy_pepper: str = "") -> str:
+    """Resolve the hash pepper from the database, creating one if missing.
+
+    Historically the pepper was derived from the master key (api_key[:16]);
+    if scoped keys already exist we keep that legacy pepper so their hashes
+    stay valid. Fresh installs get an independent random pepper.
+    """
+    existing = db.get_meta(PEPPER_META_KEY)
+    if existing is not None:
+        return existing
+    if legacy_pepper and db.list_api_keys():
+        pepper = legacy_pepper
+    else:
+        pepper = secrets.token_hex(16)
+    db.set_meta(PEPPER_META_KEY, pepper)
+    return pepper
 
 
 def generate_api_key(*, test: bool = False) -> str:
@@ -171,8 +197,8 @@ class ApiKeyStore:
         key_hash = hash_api_key(raw_token, pepper=self.pepper)
         rec = self.db.get_api_key_by_hash(key_hash)
         if rec is None:
-            # Constant-time-ish dead end against timing of missing keys
-            hmac.compare_digest(key_hash, key_hash)
+            # Equalize work on the miss path (compare against a fixed dummy hash)
+            hmac.compare_digest(key_hash, _DUMMY_HASH)
             return None
         if not rec.enabled or rec.revoked_at is not None:
             return None

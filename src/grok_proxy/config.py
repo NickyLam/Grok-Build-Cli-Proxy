@@ -107,12 +107,10 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=_alias("GROK_PROXY_ALLOW_PUBLIC_BIND", "allow_public_bind"),
     )
-    chat_stream_via_orchestrator: bool = Field(
-        default=True,
-        validation_alias=_alias(
-            "GROK_PROXY_CHAT_STREAM_VIA_ORCHESTRATOR",
-            "chat_stream_via_orchestrator",
-        ),
+    # Print the full plaintext API key in the startup banner (masked by default)
+    banner_show_key: bool = Field(
+        default=False,
+        validation_alias=_alias("GROK_PROXY_BANNER_SHOW_KEY", "banner_show_key"),
     )
 
     def validate_bind_safety(self) -> None:
