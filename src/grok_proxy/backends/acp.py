@@ -53,12 +53,14 @@ class _AcpHandle:
     pending: dict[int, asyncio.Future[Any]] = field(default_factory=dict)
     event_queue: asyncio.Queue[BackendEvent | None] = field(default_factory=asyncio.Queue)
     reader_task: asyncio.Task[None] | None = None
+    stderr_task: asyncio.Task[None] | None = None
     backend_session_id: str | None = None
     text_acc: list[str] = field(default_factory=list)
     prompt_done: asyncio.Event = field(default_factory=asyncio.Event)
     last_usage: dict[str, Any] | None = None
     last_stop_reason: str | None = None
     include_thoughts: bool = False
+    stderr_chunks: list[bytes] = field(default_factory=list)
 
 
 class AcpBackend:
@@ -93,6 +95,8 @@ class AcpBackend:
 
     async def start_session(self, request: BackendSessionRequest) -> BackendSession:
         cmd = [self.grok_bin, *self.agent_args]
+        env = os.environ.copy()
+        env.setdefault("GROK_DISABLE_AUTOUPDATER", "1")
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -100,9 +104,8 @@ class AcpBackend:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=request.cwd,
-                env=os.environ.copy(),
+                env=env,
                 start_new_session=(os.name != "nt"),
-                limit=STREAM_LIMIT,
             )
         except FileNotFoundError as e:
             raise BackendError(f"failed to spawn ACP: {e}", code="acp_not_found") from e
@@ -110,6 +113,11 @@ class AcpBackend:
         if proc.stdout is not None:
             try:
                 proc.stdout._limit = STREAM_LIMIT  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
+        if proc.stderr is not None:
+            try:
+                proc.stderr._limit = STREAM_LIMIT  # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001
                 pass
 
@@ -120,9 +128,12 @@ class AcpBackend:
             or bool(request.metadata.get("include_thoughts")),
         )
         handle.reader_task = asyncio.create_task(self._read_loop(handle))
+        handle.stderr_task = asyncio.create_task(self._drain_stderr(handle))
         local_sid = request.session_id or f"acp_{uuid.uuid4().hex[:12]}"
 
         try:
+            # Cold start: plugins/MCP can delay first RPC well past 15s
+            await asyncio.sleep(0.15)
             await self._rpc(
                 handle,
                 "initialize",
@@ -131,13 +142,14 @@ class AcpBackend:
                     "clientInfo": {"name": "grok-proxy", "version": "0.2.0"},
                     "capabilities": {},
                 },
+                timeout=60,
             )
             try:
                 await self._rpc(
                     handle,
                     "authenticate",
                     {"methodId": self.auth_method_id},
-                    timeout=15,
+                    timeout=30,
                 )
             except BackendError as e:
                 logger.warning("ACP authenticate skipped/failed: %s", e)
@@ -149,7 +161,7 @@ class AcpBackend:
                     "cwd": request.cwd,
                     "mcpServers": [],
                 },
-                timeout=60,
+                timeout=90,
             )
             if isinstance(result, dict):
                 handle.backend_session_id = (
@@ -342,11 +354,36 @@ class AcpBackend:
             handle.pending.pop(rid, None)
             raise BackendError(f"ACP RPC timeout: {method}", code="acp_timeout") from e
 
+    async def _drain_stderr(self, handle: _AcpHandle) -> None:
+        """Must drain stderr or a chatty agent can block on a full pipe."""
+        assert handle.proc and handle.proc.stderr
+        try:
+            while True:
+                chunk = await handle.proc.stderr.read(8192)
+                if not chunk:
+                    break
+                handle.stderr_chunks.append(chunk)
+                # keep a bounded tail
+                if sum(len(c) for c in handle.stderr_chunks) > 200_000:
+                    handle.stderr_chunks = handle.stderr_chunks[-20:]
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.debug("ACP stderr drain ended", exc_info=True)
+
     async def _read_loop(self, handle: _AcpHandle) -> None:
         assert handle.proc and handle.proc.stdout
         try:
             while True:
-                line_b = await handle.proc.stdout.readline()
+                try:
+                    line_b = await handle.proc.stdout.readline()
+                except ValueError:
+                    # oversize NDJSON line — bump limit and retry once
+                    try:
+                        handle.proc.stdout._limit = STREAM_LIMIT * 2  # type: ignore[attr-defined]
+                    except Exception:  # noqa: BLE001
+                        pass
+                    line_b = await handle.proc.stdout.readline()
                 if not line_b:
                     break
                 line = line_b.decode("utf-8", errors="replace").strip()
@@ -385,6 +422,9 @@ class AcpBackend:
             raise
         except Exception:  # noqa: BLE001
             logger.exception("ACP read loop failed")
+            tail = b"".join(handle.stderr_chunks).decode(errors="replace")[-800:]
+            if tail:
+                logger.error("ACP stderr tail: %s", tail)
         finally:
             for fut in handle.pending.values():
                 if not fut.done():
@@ -417,13 +457,15 @@ class AcpBackend:
 
     async def _kill(self, handle: _AcpHandle) -> None:
         handle.cancel.set()
-        if handle.reader_task:
-            handle.reader_task.cancel()
-            try:
-                await handle.reader_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
-            handle.reader_task = None
+        for task_attr in ("reader_task", "stderr_task"):
+            task = getattr(handle, task_attr, None)
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
+                setattr(handle, task_attr, None)
         if handle.proc and handle.proc.returncode is None:
             try:
                 if os.name != "nt" and handle.proc.pid:

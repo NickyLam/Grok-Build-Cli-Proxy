@@ -17,11 +17,19 @@ fi
 
 echo "  info  grok=$GROK_BIN ($(command -v "$GROK_BIN"))"
 
+# Cold start of `grok agent stdio` can exceed 15s (plugins / MCP). Default 60s.
+INIT_TO="${E2E_ACP_INIT_TIMEOUT:-60}"
+PROMPT_TO="${E2E_ACP_PROMPT_TIMEOUT:-180}"
+
 if [[ "${E2E_LIVE_PROMPT:-0}" == "1" ]]; then
   uv run python scripts/probe_acp.py --grok-bin "$GROK_BIN" --cwd "$ROOT" \
-    --prompt "Reply with exactly the single word: pong" --timeout 180
+    --init-timeout "$INIT_TO" \
+    --prompt "Reply with exactly the single word: pong" --timeout "$PROMPT_TO" \
+    ${E2E_VERBOSE:+-v}
 else
-  uv run python scripts/probe_acp.py --grok-bin "$GROK_BIN" --cwd "$ROOT"
+  uv run python scripts/probe_acp.py --grok-bin "$GROK_BIN" --cwd "$ROOT" \
+    --init-timeout "$INIT_TO" \
+    ${E2E_VERBOSE:+-v}
   echo "  SKIP  live prompt (set E2E_LIVE_PROMPT=1)"
 fi
 

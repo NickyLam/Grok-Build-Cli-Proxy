@@ -64,9 +64,21 @@ RPC result:
 ```bash
 uv run python scripts/probe_acp.py
 uv run python scripts/probe_acp.py --prompt "Reply with: pong"
+# cold start can exceed 15s — default init timeout is 60s
+E2E_ACP_INIT_TIMEOUT=90 uv run python scripts/probe_acp.py -v
 ```
 
 Exit codes: `0` OK, `2` initialize fail, `3` session fail, `4` prompt fail.
+
+### `TIMEOUT initialize` troubleshooting
+
+| Cause | Fix |
+|-------|-----|
+| Cold start slow (plugins / MCP like Pencil) | Raise `E2E_ACP_INIT_TIMEOUT` (default 60) |
+| stderr pipe full (process stuck) | Probe now drains stderr; update to latest `scripts/probe_acp.py` |
+| Huge JSON line | StreamReader limit raised to 32MB |
+| Auth / network hang | Check `~/.grok/auth.json`, retry; use `-v` for stderr |
+| Binary wrong | `which grok` → should be Grok Build CLI with `agent stdio` |
 
 ## Cancel
 
