@@ -13,12 +13,13 @@ from grok_proxy import __version__
 from grok_proxy.api.keys import build_keys_router
 from grok_proxy.api.permissions import build_permissions_router
 from grok_proxy.api.responses import build_responses_router
-from grok_proxy.api_keys import ApiKeyStore
+from grok_proxy.api_keys import ApiKeyStore, get_or_create_pepper
 from grok_proxy.auth import authenticate_request, get_auth_context
 from grok_proxy.backends.acp import select_backend
 from grok_proxy.bootstrap import bootstrap_settings
 from grok_proxy.concurrency import ConcurrencyGate, PerKeyConcurrencyTracker
-from grok_proxy.config import Settings, cwd_is_allowed, get_settings, resolve_cwd
+from grok_proxy.config import Settings, get_settings
+from grok_proxy.credentials import workbuddy_model_entry
 from grok_proxy.errors import ProxyError, http_exception_handler, proxy_error_handler
 from grok_proxy.grok_runner import GrokResult, GrokRunner, map_usage
 from grok_proxy.mcp.server import McpToolRouter
@@ -94,7 +95,6 @@ def create_app(
         app.state.runtime_models = models_rt
         app.state.gate = ConcurrencyGate(cfg.max_concurrent)
         app.state.per_key_gate = PerKeyConcurrencyTracker()
-        app.state.sessions = SessionStore()
         app.state.process_manager = ProcessManager()
         reclaimed = app.state.process_manager.reclaim_stale_pids()
         if reclaimed:
@@ -103,6 +103,8 @@ def create_app(
 
         db_path = database_path or cfg.database_path or str(_default_db_path())
         app.state.db = open_database(db_path)
+        # Session→cwd map persists in SQLite so strict checks survive restarts
+        app.state.sessions = SessionStore(app.state.db)
         app.state.workspace = WorkspaceManager(
             allowlist=cfg.cwd_allowlist,
             allow_in_place=cfg.allow_in_place,
@@ -112,7 +114,12 @@ def create_app(
             app.state.db,
             permission_timeout_sec=cfg.permission_timeout_sec,
         )
-        app.state.key_store = ApiKeyStore(app.state.db, pepper=cfg.api_key[:16] if cfg.api_key else "")
+        # Pepper lives in the database (decoupled from the master key); legacy
+        # installs that hashed with api_key[:16] keep their existing scoped keys.
+        pepper = get_or_create_pepper(
+            app.state.db, legacy_pepper=cfg.api_key[:16] if cfg.api_key else ""
+        )
+        app.state.key_store = ApiKeyStore(app.state.db, pepper=pepper)
         app.state.metrics = MetricsRegistry()
 
         selected = backend
@@ -176,10 +183,12 @@ def create_app(
         lifespan=lifespan,
     )
     app.add_middleware(RequestContextMiddleware)
-    app.add_exception_handler(ProxyError, proxy_error_handler)
+    # Starlette's ExceptionHandler type does not model per-exception handlers;
+    # the callables are correct at runtime (FastAPI dispatches by exception type).
+    app.add_exception_handler(ProxyError, proxy_error_handler)  # type: ignore[arg-type]
     from fastapi import HTTPException
 
-    app.add_exception_handler(HTTPException, http_exception_handler)
+    app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore[arg-type]
 
     def get_cfg(request: Request) -> Settings:
         return request.app.state.settings
@@ -217,11 +226,7 @@ def create_app(
             request.app.state.db.get_response("__health_probe__")
             checks["database"] = True
         except Exception:  # noqa: BLE001
-            try:
-                _ = request.app.state.db
-                checks["database"] = True
-            except Exception:  # noqa: BLE001
-                checks["database"] = False
+            checks["database"] = False
         from shutil import which
 
         checks["grok_bin"] = bool(which(cfg.grok_bin) or Path(cfg.grok_bin).is_file())
@@ -282,6 +287,15 @@ def create_app(
         _: None = Depends(require_auth),
         cfg: Settings = Depends(get_cfg),
     ) -> dict[str, Any]:
+        # Master-only: the payload contains the plaintext master key, so scoped
+        # keys must never be able to read it (privilege escalation otherwise).
+        auth = get_auth_context(request)
+        if not auth.is_master:
+            raise ProxyError(
+                "/v1/connection is restricted to the master key",
+                status_code=403,
+                code="master_only",
+            )
         host = cfg.host if cfg.host not in ("0.0.0.0", "::") else "127.0.0.1"
         base_url = f"http://{host}:{cfg.port}/v1"
         return {
@@ -290,17 +304,9 @@ def create_app(
             "model_id": cfg.default_model,
             "model": cfg.default_model,
             "models": cfg.model_ids(),
-            "workbuddy": {
-                "id": cfg.default_model,
-                "name": cfg.default_model,
-                "vendor": "Custom",
-                "url": base_url,
-                "apiKey": cfg.api_key,
-                "supportsToolCall": False,
-                "supportsImages": False,
-                "supportsReasoning": False,
-                "useCustomProtocol": False,
-            },
+            "workbuddy": workbuddy_model_entry(
+                api_key=cfg.api_key, base_url=base_url, model_id=cfg.default_model
+            ),
             "openai_sdk": {
                 "base_url": base_url,
                 "api_key": cfg.api_key,
@@ -320,22 +326,12 @@ def create_app(
             data=[ModelCard(id=mid, created=0) for mid in ids],
         )
 
-    def _resolve_request_cwd(body: ChatCompletionRequest, cfg: Settings) -> str:
+    def _resolve_request_cwd(
+        body: ChatCompletionRequest, cfg: Settings, workspace: WorkspaceManager
+    ) -> str:
+        # Single source of truth for cwd validation (existence + allowlist)
         raw = body.cwd or cfg.default_cwd
-        path = resolve_cwd(raw)
-        if not path.exists() or not path.is_dir():
-            raise ProxyError(
-                f"cwd does not exist or is not a directory: {path}",
-                status_code=400,
-                code="invalid_cwd",
-            )
-        if not cwd_is_allowed(path, cfg.cwd_allowlist):
-            raise ProxyError(
-                f"cwd not allowed by GROK_PROXY_CWD_ALLOWLIST: {path}",
-                status_code=403,
-                code="cwd_forbidden",
-            )
-        return str(path)
+        return str(workspace.resolve_and_check(raw))
 
     def _merge_rules(from_prompt: str | None, from_body: str | None) -> str | None:
         parts = [p for p in (from_prompt, from_body) if p and p.strip()]
@@ -484,7 +480,7 @@ def create_app(
         orch: ResponseOrchestrator = request.app.state.orchestrator
         metrics: MetricsRegistry = request.app.state.metrics
 
-        cwd = _resolve_request_cwd(body, cfg)
+        cwd = _resolve_request_cwd(body, cfg, request.app.state.workspace)
         auth.check_workspace(cwd)
         if body.session_id:
             sessions.check_cwd(body.session_id, cwd, strict=cfg.strict_session_cwd)

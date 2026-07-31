@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -17,9 +18,17 @@ from grok_proxy.backends.headless import HeadlessBackend
 
 logger = logging.getLogger(__name__)
 
+# After a failover, retry the ACP primary once this many seconds have passed
+# (recovery probe; without it the fallback is a one-way ratchet).
+RETRY_PRIMARY_AFTER_SEC = 300.0
+
 
 class FailoverBackend:
-    """Try primary (ACP); on handshake/start failure fall back to Headless."""
+    """Try primary (ACP); on handshake/start failure fall back to Headless.
+
+    New sessions periodically retry the primary so a recovered ACP CLI is
+    picked up again; sessions already running on the fallback stay there.
+    """
 
     def __init__(
         self,
@@ -29,6 +38,7 @@ class FailoverBackend:
         self.primary = primary
         self.fallback = fallback
         self._use_fallback = False
+        self._failed_over_at = 0.0
         self._caps = BackendCapabilities(
             name="auto",
             supports_permissions=True,
@@ -50,12 +60,24 @@ class FailoverBackend:
 
     async def start_session(self, request: BackendSessionRequest) -> BackendSession:
         if self._use_fallback:
-            return await self.fallback.start_session(request)
+            # Periodically retry the primary so recovery is possible
+            if time.monotonic() - self._failed_over_at < RETRY_PRIMARY_AFTER_SEC:
+                return await self.fallback.start_session(request)
+            try:
+                session = await self.primary.start_session(request)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("ACP retry failed, staying on headless: %s", e)
+                self._failed_over_at = time.monotonic()
+                return await self.fallback.start_session(request)
+            logger.info("ACP backend recovered, switching back from headless")
+            self._use_fallback = False
+            return session
         try:
             return await self.primary.start_session(request)
         except Exception as e:  # noqa: BLE001
             logger.warning("ACP backend failed, failing over to headless: %s", e)
             self._use_fallback = True
+            self._failed_over_at = time.monotonic()
             self.failover_count += 1
             session = await self.fallback.start_session(request)
             session.metadata["failover_from"] = "acp"

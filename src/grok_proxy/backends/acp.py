@@ -35,12 +35,10 @@ from grok_proxy.backends.base import (
     PromptInput,
 )
 from grok_proxy.backends.headless import HeadlessBackend
-from grok_proxy.grok_runner import GrokRunner
+from grok_proxy.grok_runner import GrokRunner, iter_ndjson_lines
 from grok_proxy.runtime.process_manager import ProcessManager
 
 logger = logging.getLogger(__name__)
-
-STREAM_LIMIT = 16 * 1024 * 1024
 
 
 @dataclass
@@ -109,17 +107,6 @@ class AcpBackend:
             )
         except FileNotFoundError as e:
             raise BackendError(f"failed to spawn ACP: {e}", code="acp_not_found") from e
-
-        if proc.stdout is not None:
-            try:
-                proc.stdout._limit = STREAM_LIMIT  # type: ignore[attr-defined]
-            except Exception:  # noqa: BLE001
-                pass
-        if proc.stderr is not None:
-            try:
-                proc.stderr._limit = STREAM_LIMIT  # type: ignore[attr-defined]
-            except Exception:  # noqa: BLE001
-                pass
 
         handle = _AcpHandle(
             request=request,
@@ -374,18 +361,9 @@ class AcpBackend:
     async def _read_loop(self, handle: _AcpHandle) -> None:
         assert handle.proc and handle.proc.stdout
         try:
-            while True:
-                try:
-                    line_b = await handle.proc.stdout.readline()
-                except ValueError:
-                    # oversize NDJSON line — bump limit and retry once
-                    try:
-                        handle.proc.stdout._limit = STREAM_LIMIT * 2  # type: ignore[attr-defined]
-                    except Exception:  # noqa: BLE001
-                        pass
-                    line_b = await handle.proc.stdout.readline()
-                if not line_b:
-                    break
+            # Robust line reader: oversized NDJSON lines (huge tool results)
+            # are dropped with a warning instead of raising LimitOverrunError.
+            async for line_b in iter_ndjson_lines(handle.proc.stdout):
                 line = line_b.decode("utf-8", errors="replace").strip()
                 if not line:
                     continue
@@ -412,7 +390,8 @@ class AcpBackend:
                             fut.set_result(msg.get("result"))
                     continue
                 method = str(msg.get("method") or "")
-                params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+                raw_params = msg.get("params")
+                params = raw_params if isinstance(raw_params, dict) else {}
                 mapped = self._map_notification(method, params, handle)
                 if mapped:
                     if mapped.type == "text":

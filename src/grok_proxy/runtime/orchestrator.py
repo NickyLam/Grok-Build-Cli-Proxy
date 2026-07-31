@@ -15,6 +15,7 @@ from grok_proxy.backends.base import (
     PermissionDecisionPayload,
     PromptInput,
 )
+from grok_proxy.concurrency import ConcurrencyGate, PerKeyConcurrencyTracker
 from grok_proxy.errors import ProxyError
 from grok_proxy.permissions.broker import PermissionBroker
 from grok_proxy.runtime.commands import CreateResponseCommand
@@ -36,6 +37,8 @@ class _LiveRun:
     workspace: WorkspaceAllocation | None = None
     subscribers: list[asyncio.Queue[EventRecord | None]] = field(default_factory=list)
     permission_waiters: dict[str, asyncio.Future[Any]] = field(default_factory=dict)
+    # Active response-level timeout; paused while waiting for human approval
+    timeout_ctx: asyncio.Timeout | None = None
 
 
 class ResponseOrchestrator:
@@ -48,8 +51,8 @@ class ResponseOrchestrator:
         permissions: PermissionBroker | None = None,
         process_manager: ProcessManager | None = None,
         max_concurrent: int = 2,
-        gate: Any | None = None,
-        per_key_gate: Any | None = None,
+        gate: ConcurrencyGate | None = None,
+        per_key_gate: PerKeyConcurrencyTracker | None = None,
     ) -> None:
         self.db = db
         self.backend = backend
@@ -129,9 +132,9 @@ class ResponseOrchestrator:
             workspace_mode=workspace_mode,
             created_at=now,
         )
-        self.db.create_response(record)
-        self._emit(response_id, "response.created", {"id": response_id, "status": "queued"})
-        self._emit(response_id, "response.queued", {"id": response_id})
+        await self.db.create_response_async(record)
+        await self._emit(response_id, "response.created", {"id": response_id, "status": "queued"})
+        await self._emit(response_id, "response.queued", {"id": response_id})
         live = _LiveRun(response_id=response_id)
         self._runs[response_id] = live
 
@@ -155,7 +158,7 @@ class ResponseOrchestrator:
             return
 
         async def _runner() -> None:
-            rec0 = self.get(response_id)
+            rec0 = await self.get_async(response_id)
             actor_id = str((rec0.metadata_json or {}).get("actor_id") or "")
             actor_limit = (rec0.metadata_json or {}).get("actor_max_concurrent")
             try:
@@ -180,7 +183,7 @@ class ResponseOrchestrator:
                 await self._execute(response_id)
             except ProxyError as e:
                 # Mark failed if we never entered _execute (e.g. key concurrency / global gate)
-                rec_f = self.get(response_id)
+                rec_f = await self.get_async(response_id)
                 if rec_f.status in (ResponseStatus.QUEUED.value, ResponseStatus.IN_PROGRESS.value) and e.code in (
                     "key_max_concurrent",
                     "max_concurrent",
@@ -189,13 +192,14 @@ class ResponseOrchestrator:
                     rec_f.error_code = e.code
                     rec_f.error_message = e.message
                     rec_f.completed_at = time.time()
-                    self.db.update_response(rec_f)
-                    self._emit(
+                    await self.db.update_response_async(rec_f)
+                    await self._emit(
                         response_id,
                         "response.failed",
                         {"id": response_id, "code": e.code, "message": e.message},
                     )
                     self._notify_terminal(response_id)
+                    self._finalize_run(response_id)
                 elif e.code not in ("key_max_concurrent", "max_concurrent"):
                     raise
             finally:
@@ -212,8 +216,14 @@ class ResponseOrchestrator:
             raise ProxyError("response not found", status_code=404, code="response_not_found")
         return rec
 
+    async def get_async(self, response_id: str) -> ResponseRecord:
+        rec = await self.db.get_response_async(response_id)
+        if rec is None:
+            raise ProxyError("response not found", status_code=404, code="response_not_found")
+        return rec
+
     async def cancel(self, response_id: str, actor: str = "api") -> ResponseRecord:
-        record = self.get(response_id)
+        record = await self.get_async(response_id)
         sm = ResponseStateMachine(record.status)
         if sm.is_terminal:
             if record.status == ResponseStatus.CANCELLED.value:
@@ -237,15 +247,15 @@ class ResponseOrchestrator:
         try:
             sm.transition(ResponseStatus.CANCELLED)
         except ProxyError:
-            return self.get(response_id)
+            return await self.get_async(response_id)
 
         now = time.time()
-        record = self.get(response_id)
+        record = await self.get_async(response_id)
         record.status = ResponseStatus.CANCELLED.value
         record.cancelled_at = now
         record.completed_at = now
-        self.db.update_response(record)
-        self._emit(response_id, "response.cancelled", {"id": response_id})
+        await self.db.update_response_async(record)
+        await self._emit(response_id, "response.cancelled", {"id": response_id})
         self.db.insert_audit(
             actor_type="user",
             actor_id=actor,
@@ -255,20 +265,25 @@ class ResponseOrchestrator:
             payload={},
         )
         await self._cleanup_run(response_id, keep_workspace=False)
-        return self.get(response_id)
+        self._notify_terminal(response_id)
+        # If no task is running the _execute finally-block will never fire;
+        # drop the live entry here so _runs does not leak.
+        if live is None or live.task is None or live.task.done():
+            self._finalize_run(response_id)
+        return await self.get_async(response_id)
 
     async def stream_events(
         self,
         response_id: str,
         after_sequence: int = 0,
     ) -> AsyncIterator[EventRecord]:
-        self.get(response_id)  # 404 if missing
+        await self.get_async(response_id)  # 404 if missing
         # replay first
-        for ev in self.db.list_events(response_id, after_sequence=after_sequence):
+        for ev in await self.db.list_events_async(response_id, after_sequence=after_sequence):
             yield ev
             after_sequence = max(after_sequence, ev.sequence_number)
 
-        record = self.get(response_id)
+        record = await self.get_async(response_id)
         if record.status in {
             ResponseStatus.COMPLETED.value,
             ResponseStatus.FAILED.value,
@@ -285,7 +300,9 @@ class ResponseOrchestrator:
                 item = await queue.get()
                 if item is None:
                     # terminal signal — drain remaining from DB
-                    for ev in self.db.list_events(response_id, after_sequence=after_sequence):
+                    for ev in await self.db.list_events_async(
+                        response_id, after_sequence=after_sequence
+                    ):
                         yield ev
                     return
                 if item.sequence_number <= after_sequence:
@@ -319,7 +336,7 @@ class ResponseOrchestrator:
             feedback=feedback,
             scope=scope,
         )
-        self._emit(
+        await self._emit(
             rec.response_id,
             "response.permission.resolved",
             {
@@ -339,11 +356,11 @@ class ResponseOrchestrator:
             return rec
 
         # Resume backend if waiting
-        record = self.get(rec.response_id)
+        record = await self.get_async(rec.response_id)
         if record.status == ResponseStatus.WAITING_FOR_APPROVAL.value:
             record.status = ResponseStatus.IN_PROGRESS.value
-            self.db.update_response(record)
-            self._emit(rec.response_id, "response.in_progress", {"id": rec.response_id, "resumed": True})
+            await self.db.update_response_async(record)
+            await self._emit(rec.response_id, "response.in_progress", {"id": rec.response_id, "resumed": True})
 
         if live and live.session is not None:
             try:
@@ -372,7 +389,7 @@ class ResponseOrchestrator:
 
     async def _execute(self, response_id: str) -> None:
         live = self._runs.setdefault(response_id, _LiveRun(response_id=response_id))
-        record = self.get(response_id)
+        record = await self.get_async(response_id)
         xg = record.x_grok_json
         timeout = int(xg.get("timeout_sec") or 600)
 
@@ -381,8 +398,9 @@ class ResponseOrchestrator:
             sm.transition(ResponseStatus.IN_PROGRESS)
             record.status = ResponseStatus.IN_PROGRESS.value
             record.started_at = time.time()
-            self.db.update_response(record)
-            self._emit(response_id, "response.in_progress", {"id": response_id})
+            if not await self.db.update_response_if_active_async(record):
+                return  # already terminal (e.g. cancelled before start)
+            await self._emit(response_id, "response.in_progress", {"id": response_id})
 
             alloc = self.workspace.allocate(
                 str(xg.get("cwd") or record.source_cwd),
@@ -394,9 +412,14 @@ class ResponseOrchestrator:
             record.run_cwd = alloc.run_cwd
             record.workspace_mode = alloc.mode
             record.source_cwd = alloc.source_cwd
-            self.db.update_response(record)
+            # Conditional write: a concurrent cancel() may have gone terminal
+            # while allocate yielded — never clobber a terminal status.
+            if not await self.db.update_response_if_active_async(record):
+                return
+            if live.cancel_event.is_set():
+                return
             if alloc.mode == "worktree":
-                self._emit(
+                await self._emit(
                     response_id,
                     "response.workspace.created",
                     {
@@ -466,10 +489,18 @@ class ResponseOrchestrator:
                         )
 
             try:
-                await asyncio.wait_for(_consume(), timeout=timeout)
+                # asyncio.timeout (instead of wait_for) so permission waits can
+                # pause the clock — approval time no longer counts against the
+                # response timeout (see _handle_permission_request).
+                try:
+                    async with asyncio.timeout(timeout) as tm:
+                        live.timeout_ctx = tm
+                        await _consume()
+                finally:
+                    live.timeout_ctx = None
             except TimeoutError:
                 await self.backend.cancel(session)
-                record = self.get(response_id)
+                record = await self.get_async(response_id)
                 if record.status not in {
                     ResponseStatus.CANCELLED.value,
                     ResponseStatus.COMPLETED.value,
@@ -481,8 +512,8 @@ class ResponseOrchestrator:
                     record.completed_at = time.time()
                     if usage:
                         record.usage_json = usage
-                    self.db.update_response(record)
-                    self._emit(
+                    await self.db.update_response_async(record)
+                    await self._emit(
                         response_id,
                         "response.incomplete",
                         {"id": response_id, "reason": "timeout"},
@@ -490,7 +521,7 @@ class ResponseOrchestrator:
                 return
 
             # final status if not already terminal (cancel/permission path)
-            record = self.get(response_id)
+            record = await self.get_async(response_id)
             if record.status in {
                 ResponseStatus.CANCELLED.value,
                 ResponseStatus.FAILED.value,
@@ -515,13 +546,13 @@ class ResponseOrchestrator:
             ]
             record.status = ResponseStatus.COMPLETED.value
             record.completed_at = time.time()
-            self.db.update_response(record)
-            self._emit(
+            await self.db.update_response_async(record)
+            await self._emit(
                 response_id,
                 "response.output_text.done",
                 {"text": final_text},
             )
-            self._emit(
+            await self._emit(
                 response_id,
                 "response.completed",
                 {
@@ -531,31 +562,34 @@ class ResponseOrchestrator:
                 },
             )
         except ProxyError as e:
-            record = self.get(response_id)
+            record = await self.get_async(response_id)
             if record.status != ResponseStatus.CANCELLED.value:
                 record.status = ResponseStatus.FAILED.value
                 record.error_code = e.code
                 record.error_message = e.message
                 record.completed_at = time.time()
-                self.db.update_response(record)
-                self._emit(
+                await self.db.update_response_async(record)
+                await self._emit(
                     response_id,
                     "response.failed",
                     {"id": response_id, "code": e.code, "message": e.message},
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception("response %s failed", response_id)
-            record = self.get(response_id)
+            record = await self.get_async(response_id)
             if record.status != ResponseStatus.CANCELLED.value:
+                # Never surface raw internal exception text to clients (may leak
+                # paths/config); details are in the server log above.
+                message = "internal error (see server logs)"
                 record.status = ResponseStatus.FAILED.value
                 record.error_code = "internal_error"
-                record.error_message = str(e)
+                record.error_message = message
                 record.completed_at = time.time()
-                self.db.update_response(record)
-                self._emit(
+                await self.db.update_response_async(record)
+                await self._emit(
                     response_id,
                     "response.failed",
-                    {"id": response_id, "code": "internal_error", "message": str(e)},
+                    {"id": response_id, "code": "internal_error", "message": message},
                 )
         finally:
             try:
@@ -565,6 +599,7 @@ class ResponseOrchestrator:
                 logger.exception("backend close failed")
             await self._cleanup_run(response_id, keep_workspace=False)
             self._notify_terminal(response_id)
+            self._finalize_run(response_id)
 
     async def _handle_backend_event(
         self,
@@ -576,9 +611,9 @@ class ResponseOrchestrator:
         if be.type == "text":
             chunk = str(be.data.get("text") or "")
             text_parts.append(chunk)
-            self._emit(response_id, "response.output_text.delta", {"delta": chunk})
+            await self._emit(response_id, "response.output_text.delta", {"delta": chunk})
         elif be.type == "tool_call":
-            self._emit(
+            await self._emit(
                 response_id,
                 "response.tool_call.started",
                 {
@@ -589,7 +624,7 @@ class ResponseOrchestrator:
                 },
             )
         elif be.type == "tool_update":
-            self._emit(response_id, "response.tool_call.updated", be.data)
+            await self._emit(response_id, "response.tool_call.updated", be.data)
         elif be.type == "tool_result":
             status = str(be.data.get("status") or "completed")
             et = (
@@ -597,16 +632,16 @@ class ResponseOrchestrator:
                 if status in ("failed", "error")
                 else "response.tool_call.completed"
             )
-            self._emit(response_id, et, be.data)
+            await self._emit(response_id, et, be.data)
         elif be.type == "plan":
-            self._emit(response_id, "response.plan.updated", be.data)
+            await self._emit(response_id, "response.plan.updated", be.data)
         elif be.type == "usage":
-            self._emit(response_id, "response.usage.updated", be.data)
+            await self._emit(response_id, "response.usage.updated", be.data)
         elif be.type == "permission_request":
             await self._handle_permission_request(response_id, be)
         elif be.type == "error":
             # handled by caller for terminal errors; still journal
-            self._emit(response_id, "response.failed", be.data)
+            await self._emit(response_id, "response.failed", be.data)
         elif be.type == "end":
             # end is aggregated by caller
             pass
@@ -615,13 +650,6 @@ class ResponseOrchestrator:
         category = str(be.data.get("category") or "unknown")
         risk = str(be.data.get("risk") or "medium")
         arguments = be.data.get("arguments") if isinstance(be.data.get("arguments"), dict) else {}
-        evaluation = self.permissions.evaluate(
-            category=category,
-            risk=risk,
-            arguments=arguments,
-            force_ask=True,  # ACP path always surfaces unless policy auto-allows
-        )
-        # Re-evaluate without force for auto allow/deny
         evaluation = self.permissions.evaluate(
             category=category,
             risk=risk,
@@ -638,7 +666,7 @@ class ResponseOrchestrator:
                         decision="allow_once",
                     ),
                 )
-            self._emit(
+            await self._emit(
                 response_id,
                 "response.permission.resolved",
                 {"decision": "allow_once", "auto": True, "category": category},
@@ -655,7 +683,7 @@ class ResponseOrchestrator:
                         feedback="Denied by server policy",
                     ),
                 )
-            self._emit(
+            await self._emit(
                 response_id,
                 "response.permission.resolved",
                 {"decision": "deny_once", "auto": True, "category": category},
@@ -671,10 +699,10 @@ class ResponseOrchestrator:
             title=str(be.data.get("title") or "Permission required"),
             description=str(be.data.get("description") or ""),
         )
-        record = self.get(response_id)
+        record = await self.get_async(response_id)
         record.status = ResponseStatus.WAITING_FOR_APPROVAL.value
-        self.db.update_response(record)
-        self._emit(
+        await self.db.update_response_async(record)
+        await self._emit(
             response_id,
             "response.permission.required",
             {
@@ -691,6 +719,15 @@ class ResponseOrchestrator:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[Any] = loop.create_future()
         live.permission_waiters[perm.id] = fut
+        # Pause the response-level timeout while a human decides; approval
+        # latency is governed solely by permission_timeout_sec.
+        tm = live.timeout_ctx
+        resume_after: float | None = None
+        if tm is not None:
+            deadline = tm.when()
+            if deadline is not None:
+                resume_after = max(0.0, deadline - loop.time())
+                tm.reschedule(None)
         try:
             await asyncio.wait_for(fut, timeout=self.permissions.permission_timeout_sec)
         except TimeoutError:
@@ -705,9 +742,11 @@ class ResponseOrchestrator:
             ) from None
         finally:
             live.permission_waiters.pop(perm.id, None)
+            if tm is not None and resume_after is not None:
+                tm.reschedule(loop.time() + resume_after)
 
-    def _emit(self, response_id: str, event_type: str, payload: dict[str, Any]) -> EventRecord:
-        ev = self.db.append_event(response_id, event_type, payload)
+    async def _emit(self, response_id: str, event_type: str, payload: dict[str, Any]) -> EventRecord:
+        ev = await self.db.append_event_async(response_id, event_type, payload)
         live = self._runs.get(response_id)
         if live:
             for q in list(live.subscribers):
@@ -727,6 +766,14 @@ class ResponseOrchestrator:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _finalize_run(self, response_id: str) -> None:
+        """Drop the live entry once terminal (subscribers already got the sentinel).
+
+        Without this _runs grows forever; terminal responses replay from the DB
+        so a live entry is no longer needed.
+        """
+        self._runs.pop(response_id, None)
+
     async def _cleanup_run(self, response_id: str, *, keep_workspace: bool) -> None:
         live = self._runs.get(response_id)
         if not live:
@@ -736,11 +783,12 @@ class ResponseOrchestrator:
             if not keep_workspace:
                 failed = False
                 try:
-                    rec = self.get(response_id)
+                    rec = await self.get_async(response_id)
                     failed = rec.status == ResponseStatus.FAILED.value
                 except ProxyError:
                     failed = True
                 self.workspace.cleanup(live.workspace, keep_on_failure=failed)
+            live.workspace = None
 
     async def _wait_terminal(self, response_id: str, *, timeout: float) -> None:
         live = self._runs.get(response_id)
@@ -751,15 +799,5 @@ class ResponseOrchestrator:
                 await self.cancel(response_id, actor="wait_timeout")
             except asyncio.CancelledError:
                 pass
-        # poll status as fallback
-        deadline = time.time() + 1
-        while time.time() < deadline:
-            rec = self.get(response_id)
-            if rec.status in {
-                ResponseStatus.COMPLETED.value,
-                ResponseStatus.FAILED.value,
-                ResponseStatus.CANCELLED.value,
-                ResponseStatus.INCOMPLETE.value,
-            }:
-                return
-            await asyncio.sleep(0.01)
+        # Task completion implies the terminal status was persisted inside
+        # _execute's finally block — no polling needed.

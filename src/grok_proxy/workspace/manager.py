@@ -40,7 +40,7 @@ class WorkspaceManager:
     ) -> None:
         self.allowlist = allowlist or []
         self.allow_in_place = allow_in_place
-        self.default_mode = default_mode
+        self.default_mode: WorkspaceMode = default_mode
         self.worktree_root = Path(worktree_root) if worktree_root else None
         # workspace_key -> exclusive response_id
         self._write_locks: dict[str, str] = {}

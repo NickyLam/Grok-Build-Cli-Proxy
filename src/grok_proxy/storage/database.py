@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import threading
@@ -8,10 +9,13 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from grok_proxy.storage.migrations import apply_migrations
 from grok_proxy.storage.models import EventRecord, PermissionRecord, ResponseRecord
+
+if TYPE_CHECKING:
+    from grok_proxy.api_keys import ApiKeyRecord
 
 
 def _json_dumps(value: Any) -> str:
@@ -26,6 +30,10 @@ def _json_loads(value: str | None, default: Any) -> Any:
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+# Statuses that must never be overwritten by a non-terminal update
+TERMINAL_STATUSES = ("completed", "failed", "cancelled", "incomplete")
 
 
 class Database:
@@ -138,6 +146,33 @@ class Database:
             )
         return record
 
+    def update_response_if_active(self, record: ResponseRecord) -> bool:
+        """Update only while the stored status is non-terminal.
+
+        Guards against racy writers (e.g. the run task) clobbering a terminal
+        status written concurrently (e.g. by cancel). Returns False when the
+        stored record is already terminal and nothing was written.
+        """
+        placeholders = ",".join("?" for _ in TERMINAL_STATUSES)
+        with self.transaction() as conn:
+            cur = conn.execute(
+                f"""
+                UPDATE responses SET
+                    status=?, run_cwd=?, workspace_mode=?, source_cwd=?, started_at=?
+                WHERE id=? AND status NOT IN ({placeholders})
+                """,
+                (
+                    record.status,
+                    record.run_cwd,
+                    record.workspace_mode,
+                    record.source_cwd,
+                    record.started_at,
+                    record.id,
+                    *TERMINAL_STATUSES,
+                ),
+            )
+            return cur.rowcount > 0
+
     def append_event(
         self,
         response_id: str,
@@ -210,6 +245,45 @@ class Database:
                 (response_id, after_sequence),
             ).fetchall()
         return [self._row_to_event(r) for r in rows]
+
+    # ---- async variants (avoid blocking the event loop on hot paths) ----
+
+    async def create_response_async(self, record: ResponseRecord) -> ResponseRecord:
+        return await asyncio.to_thread(self.create_response, record)
+
+    async def get_response_async(self, response_id: str) -> ResponseRecord | None:
+        return await asyncio.to_thread(self.get_response, response_id)
+
+    async def update_response_async(self, record: ResponseRecord) -> ResponseRecord:
+        return await asyncio.to_thread(self.update_response, record)
+
+    async def update_response_if_active_async(self, record: ResponseRecord) -> bool:
+        return await asyncio.to_thread(self.update_response_if_active, record)
+
+    async def append_event_async(
+        self,
+        response_id: str,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        event_id: str | None = None,
+        created_at: float | None = None,
+    ) -> EventRecord:
+        return await asyncio.to_thread(
+            self.append_event,
+            response_id,
+            event_type,
+            payload,
+            event_id=event_id,
+            created_at=created_at,
+        )
+
+    async def list_events_async(
+        self, response_id: str, *, after_sequence: int = 0
+    ) -> list[EventRecord]:
+        return await asyncio.to_thread(
+            self.list_events, response_id, after_sequence=after_sequence
+        )
 
     def create_permission(self, record: PermissionRecord) -> PermissionRecord:
         with self.transaction() as conn:
@@ -340,9 +414,57 @@ class Database:
                 ),
             )
 
+    # ---- meta ----
+
+    def get_meta(self, key: str) -> str | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key = ?", (key,)
+            ).fetchone()
+        return str(row["value"]) if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    # ---- sessions ----
+
+    def upsert_session(
+        self,
+        session_id: str,
+        *,
+        source_cwd: str,
+        backend: str = "",
+    ) -> None:
+        now = time.time()
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO sessions (id, backend, source_cwd, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'active', ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    source_cwd = excluded.source_cwd,
+                    updated_at = excluded.updated_at
+                """,
+                (session_id, backend, source_cwd, now, now),
+            )
+
+    def get_session(self, session_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return {key: row[key] for key in row.keys()}
+
     # ---- api keys ----
 
-    def create_api_key(self, record: Any) -> Any:
+    def create_api_key(self, record: ApiKeyRecord) -> ApiKeyRecord:
         with self.transaction() as conn:
             conn.execute(
                 """
@@ -369,28 +491,28 @@ class Database:
             )
         return record
 
-    def get_api_key(self, key_id: str) -> Any | None:
+    def get_api_key(self, key_id: str) -> ApiKeyRecord | None:
         with self._lock:
             row = self._conn.execute(
                 "SELECT * FROM api_keys WHERE id = ?", (key_id,)
             ).fetchone()
         return self._row_to_api_key(row) if row else None
 
-    def get_api_key_by_hash(self, key_hash: str) -> Any | None:
+    def get_api_key_by_hash(self, key_hash: str) -> ApiKeyRecord | None:
         with self._lock:
             row = self._conn.execute(
                 "SELECT * FROM api_keys WHERE key_hash = ?", (key_hash,)
             ).fetchone()
         return self._row_to_api_key(row) if row else None
 
-    def list_api_keys(self) -> list[Any]:
+    def list_api_keys(self) -> list[ApiKeyRecord]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM api_keys ORDER BY created_at DESC"
             ).fetchall()
         return [self._row_to_api_key(r) for r in rows]
 
-    def update_api_key(self, record: Any) -> Any:
+    def update_api_key(self, record: ApiKeyRecord) -> ApiKeyRecord:
         with self.transaction() as conn:
             conn.execute(
                 """
@@ -437,7 +559,7 @@ class Database:
         return int(row["c"] if row else 0)
 
     @staticmethod
-    def _row_to_api_key(row: sqlite3.Row) -> Any:
+    def _row_to_api_key(row: sqlite3.Row) -> ApiKeyRecord:
         # Late import to avoid circular deps at module load
         from grok_proxy.api_keys import ApiKeyRecord
 

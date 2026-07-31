@@ -13,6 +13,45 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+async def terminate_process_tree(
+    proc: asyncio.subprocess.Process, *, force: bool = False
+) -> None:
+    """Terminate a child process (group where possible), escalating to SIGKILL.
+
+    Shared by ProcessManager and GrokRunner so there is a single
+    terminate/escalate implementation.
+    """
+    if proc.returncode is not None:
+        return
+    sig = signal.SIGKILL if force else signal.SIGTERM
+    try:
+        if os.name != "nt" and proc.pid:
+            try:
+                os.killpg(proc.pid, sig)
+            except (ProcessLookupError, PermissionError, OSError):
+                if force:
+                    proc.kill()
+                else:
+                    proc.terminate()
+        else:
+            if force:
+                proc.kill()
+            else:
+                proc.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5)
+    except TimeoutError:
+        if not force:
+            await terminate_process_tree(proc, force=True)
+        else:
+            try:
+                await proc.wait()
+            except Exception:  # noqa: BLE001
+                logger.exception("failed waiting for killed process")
+
+
 @dataclass
 class TrackedProcess:
     response_id: str
@@ -80,8 +119,9 @@ class ProcessManager:
             return 0
         killed = 0
         for entry in pids:
+            raw_pid = entry.get("pid") if isinstance(entry, dict) else entry
             try:
-                pid = int(entry.get("pid") if isinstance(entry, dict) else entry)
+                pid = int(raw_pid)  # type: ignore[arg-type]
             except (TypeError, ValueError):
                 continue
             if pid <= 0:
@@ -140,32 +180,4 @@ class ProcessManager:
 
     @staticmethod
     async def _terminate(proc: asyncio.subprocess.Process, *, force: bool = False) -> None:
-        if proc.returncode is not None:
-            return
-        sig = signal.SIGKILL if force else signal.SIGTERM
-        try:
-            if os.name != "nt" and proc.pid:
-                try:
-                    os.killpg(proc.pid, sig)
-                except (ProcessLookupError, PermissionError, OSError):
-                    if force:
-                        proc.kill()
-                    else:
-                        proc.terminate()
-            else:
-                if force:
-                    proc.kill()
-                else:
-                    proc.terminate()
-        except ProcessLookupError:
-            return
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=5)
-        except TimeoutError:
-            if not force:
-                await ProcessManager._terminate(proc, force=True)
-            else:
-                try:
-                    await proc.wait()
-                except Exception:  # noqa: BLE001
-                    logger.exception("failed waiting for killed process")
+        await terminate_process_tree(proc, force=force)

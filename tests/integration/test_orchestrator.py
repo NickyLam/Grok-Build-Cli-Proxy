@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from grok_proxy.backends.base import BackendEvent
@@ -78,4 +80,96 @@ async def test_orchestrator_cancel(tmp_path):
     # idempotent
     again = await orch.cancel(rec.id)
     assert again.status in ("cancelled", "completed")
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_runs_dict_cleaned_after_terminal(tmp_path):
+    """_runs must not leak live entries once responses reach a terminal state."""
+    db = open_database(tmp_path / "leak.db")
+    fake = FakeBackend(
+        script=[
+            BackendEvent(type="text", data={"text": "ok"}),
+            BackendEvent(type="end", data={"text": "ok"}),
+        ]
+    )
+    orch = ResponseOrchestrator(db, fake, workspace=WorkspaceManager())
+    ids = []
+    for _ in range(3):
+        rec = await orch.create(
+            CreateResponseCommand(
+                model="m",
+                input_text="hi",
+                x_grok=GrokExtensions(cwd=str(tmp_path)),
+                default_cwd=str(tmp_path),
+            )
+        )
+        assert rec.status == "completed"
+        ids.append(rec.id)
+    for rid in ids:
+        assert rid not in orch._runs
+    assert orch._runs == {}
+    db.close()
+
+
+@pytest.mark.asyncio
+async def test_permission_wait_pauses_response_timeout(tmp_path):
+    """Human approval latency must not count against the response timeout."""
+    db = open_database(tmp_path / "pt.db")
+    fake = FakeBackend(
+        script=[
+            BackendEvent(
+                type="permission_request",
+                data={
+                    "id": "tc1",
+                    "category": "shell",
+                    "risk": "medium",
+                    "arguments": {"command": "make build"},
+                    "title": "Run make build",
+                },
+            ),
+            BackendEvent(type="text", data={"text": "done"}),
+            BackendEvent(type="end", data={"text": "done"}),
+        ]
+    )
+    orch = ResponseOrchestrator(
+        db,
+        fake,
+        workspace=WorkspaceManager(),
+        permissions=PermissionBroker(db, permission_timeout_sec=30),
+    )
+    rec = await orch.create(
+        CreateResponseCommand(
+            model="m",
+            input_text="hi",
+            background=True,
+            x_grok=GrokExtensions(
+                cwd=str(tmp_path),
+                # Response timeout much shorter than the approval wait below
+                timeout_sec=1,
+                permission_policy="ask",
+            ),
+            default_cwd=str(tmp_path),
+        )
+    )
+    await orch.start(rec.id)
+
+    # Wait until the pending permission exists
+    perm_id = None
+    for _ in range(100):
+        pending = db.list_permissions(status="pending", response_id=rec.id)
+        if pending:
+            perm_id = pending[0].id
+            break
+        await asyncio.sleep(0.02)
+    assert perm_id, "permission request never surfaced"
+
+    # Approve only after the 1s response timeout would have fired
+    await asyncio.sleep(1.2)
+    await orch.decide_permission(perm_id, decision="allow_once", actor_id="tester")
+
+    await orch._wait_terminal(rec.id, timeout=10)
+    final = orch.get(rec.id)
+    assert final.status == "completed", (final.status, final.error_code)
+    assert final.text == "done"
     db.close()

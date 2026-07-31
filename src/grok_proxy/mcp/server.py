@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from typing import Any
 
+from grok_proxy import __version__
 from grok_proxy.protocol.responses_models import response_record_to_object
 from grok_proxy.runtime.commands import CreateResponseCommand, GrokExtensions
 from grok_proxy.runtime.orchestrator import ResponseOrchestrator
+
+# MCP spec revision this server implements the handshake for.
+MCP_PROTOCOL_VERSION = "2024-11-05"
 
 
 class McpToolRouter:
@@ -214,8 +219,22 @@ class McpToolRouter:
 
 
 async def run_mcp_stdio(router: McpToolRouter) -> None:
-    """Minimal JSON-RPC loop on stdin/stdout for tool listing and calls."""
-    for line in sys.stdin:
+    """MCP JSON-RPC loop on stdin/stdout.
+
+    Implements the subset real clients (Qoder / Codex / MCP SDK) need:
+    initialize handshake, notifications (no reply), ping, tools/list and
+    tools/call with the standard content-array result shape. stdin is read in
+    a worker thread so background responses keep progressing on the loop.
+    """
+
+    def _write(payload: dict[str, Any]) -> None:
+        sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+
+    while True:
+        line = await asyncio.to_thread(sys.stdin.readline)
+        if not line:  # EOF — client closed the pipe
+            return
         line = line.strip()
         if not line:
             continue
@@ -223,25 +242,55 @@ async def run_mcp_stdio(router: McpToolRouter) -> None:
             msg = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(msg, dict):
+            continue
         mid = msg.get("id")
-        method = msg.get("method")
+        method = str(msg.get("method") or "")
+        if mid is None:
+            # Notification (e.g. notifications/initialized) — must not respond
+            continue
         params = msg.get("params") or {}
         result: Any
         try:
-            if method in ("tools/list", "list_tools"):
+            if method == "initialize":
+                result = {
+                    "protocolVersion": str(
+                        params.get("protocolVersion") or MCP_PROTOCOL_VERSION
+                    ),
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "grok-proxy", "version": __version__},
+                }
+            elif method == "ping":
+                result = {}
+            elif method in ("tools/list", "list_tools"):
                 result = {"tools": router.list_tools()}
             elif method in ("tools/call", "call_tool"):
                 name = params.get("name") or params.get("tool")
                 args = params.get("arguments") or params.get("args") or {}
-                result = await router.call_tool(str(name), dict(args))
+                payload = await router.call_tool(str(name), dict(args))
+                is_error = isinstance(payload, dict) and bool(payload.get("error"))
+                # Standard MCP tool result: content array + isError flag
+                result = {
+                    "content": [
+                        {"type": "text", "text": json.dumps(payload, ensure_ascii=False)}
+                    ],
+                    "isError": is_error,
+                }
             else:
-                result = {"error": f"unknown method {method}"}
-            out = {"jsonrpc": "2.0", "id": mid, "result": result}
+                _write(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": mid,
+                        "error": {"code": -32601, "message": f"method not found: {method}"},
+                    }
+                )
+                continue
+            _write({"jsonrpc": "2.0", "id": mid, "result": result})
         except Exception as e:  # noqa: BLE001
-            out = {
-                "jsonrpc": "2.0",
-                "id": mid,
-                "error": {"code": -32000, "message": str(e)},
-            }
-        sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+            _write(
+                {
+                    "jsonrpc": "2.0",
+                    "id": mid,
+                    "error": {"code": -32000, "message": str(e)},
+                }
+            )

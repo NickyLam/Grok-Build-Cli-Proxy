@@ -4,15 +4,15 @@ import asyncio
 import json
 import logging
 import os
-import signal
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from grok_proxy.errors import ProxyError
+from grok_proxy.runtime.process_manager import terminate_process_tree
 
-# optional ProcessManager type without hard circular import at type-check time
+# optional ProcessManager instance without hard circular import at type-check time
 
 logger = logging.getLogger(__name__)
 
@@ -116,32 +116,54 @@ def _child_env(extra: dict[str, str] | None) -> dict[str, str]:
 
 
 async def _terminate_process(proc: asyncio.subprocess.Process) -> None:
-    if proc.returncode is not None:
-        return
-    try:
-        if os.name != "nt" and proc.pid:
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except (ProcessLookupError, PermissionError, OSError):
-                proc.terminate()
-        else:
-            proc.terminate()
-    except ProcessLookupError:
-        return
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=5)
-    except TimeoutError:
-        try:
-            if os.name != "nt" and proc.pid:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError, OSError):
-                    proc.kill()
-            else:
-                proc.kill()
-        except ProcessLookupError:
-            pass
-        await proc.wait()
+    # Single shared implementation (SIGTERM → SIGKILL, process-group aware)
+    await terminate_process_tree(proc)
+
+
+# Max bytes for one NDJSON line before we drop it (tool results with e.g. web
+# search payloads can exceed asyncio's 64 KiB StreamReader default).
+MAX_STREAM_LINE_BYTES = 32 * 1024 * 1024
+
+
+async def iter_ndjson_lines(
+    stream: asyncio.StreamReader,
+    *,
+    max_line_bytes: int = MAX_STREAM_LINE_BYTES,
+) -> AsyncIterator[bytes]:
+    """Yield newline-delimited lines using read() chunks.
+
+    Unlike StreamReader.readline() this never raises LimitOverrunError on
+    oversized lines: a line above max_line_bytes is dropped with a warning and
+    iteration continues with the next line.
+    """
+    buf = bytearray()
+    dropping = False
+    dropped = 0
+    while True:
+        chunk = await stream.read(65536)
+        if not chunk:
+            if buf and not dropping:
+                yield bytes(buf)
+            return
+        buf.extend(chunk)
+        while True:
+            nl = buf.find(b"\n")
+            if nl == -1:
+                if len(buf) > max_line_bytes:
+                    dropping = True
+                    dropped += len(buf)
+                    buf.clear()
+                break
+            line = bytes(buf[:nl])
+            del buf[: nl + 1]
+            if dropping:
+                # Tail of an oversized line — discard and resume normal parsing
+                dropped += nl + 1
+                logger.warning("dropped oversized stream line (~%d bytes)", dropped)
+                dropping = False
+                dropped = 0
+                continue
+            yield line
 
 
 def parse_json_result(payload: dict[str, Any], *, exit_code: int, stderr_tail: str = "") -> GrokResult:
@@ -236,18 +258,33 @@ class GrokRunner:
                 code="grok_not_found",
             ) from e
 
+        # Track like stream() does, so a crash can reclaim this child too
+        track_id = getattr(opts, "track_id", None) or f"run_{os.getpid()}_{id(opts)}"
+        if self.process_manager is not None:
+            try:
+                await self.process_manager.register(str(track_id), proc, kind="run")
+            except Exception:  # noqa: BLE001
+                logger.exception("process register failed")
+
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=opts.timeout_sec,
-            )
-        except TimeoutError:
-            await _terminate_process(proc)
-            raise ProxyError(
-                f"Grok timed out after {opts.timeout_sec}s",
-                status_code=504,
-                code="grok_timeout",
-            ) from None
+            try:
+                stdout_b, stderr_b = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=opts.timeout_sec,
+                )
+            except TimeoutError:
+                await _terminate_process(proc)
+                raise ProxyError(
+                    f"Grok timed out after {opts.timeout_sec}s",
+                    status_code=504,
+                    code="grok_timeout",
+                ) from None
+        finally:
+            if self.process_manager is not None:
+                try:
+                    await self.process_manager.unregister(str(track_id))
+                except Exception:  # noqa: BLE001
+                    pass
 
         stderr_tail = (stderr_b or b"").decode("utf-8", errors="replace")[-4000:]
         stdout = (stdout_b or b"").decode("utf-8", errors="replace").strip()
@@ -346,10 +383,7 @@ class GrokRunner:
 
         try:
             async with asyncio.timeout(opts.timeout_sec):
-                while True:
-                    line_b = await proc.stdout.readline()
-                    if not line_b:
-                        break
+                async for line_b in iter_ndjson_lines(proc.stdout):
                     line = line_b.decode("utf-8", errors="replace").strip()
                     if not line:
                         continue

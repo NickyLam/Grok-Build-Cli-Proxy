@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from grok_proxy.grok_runner import GrokRunOptions, build_grok_argv, map_usage, parse_json_result
 
 
@@ -63,3 +65,48 @@ def test_parse_json_result():
 
 def test_map_usage_empty():
     assert map_usage(None) == (0, 0, 0)
+
+
+# ---- iter_ndjson_lines: regression for LimitOverrunError on huge tool results ----
+
+
+def _reader_with(data: bytes) -> asyncio.StreamReader:
+    # Small internal limit to mirror asyncio's 64 KiB default behaviour;
+    # iter_ndjson_lines must be immune to it because it uses read(), not readline().
+    reader = asyncio.StreamReader(limit=2**16)
+    reader.feed_data(data)
+    reader.feed_eof()
+    return reader
+
+
+async def test_iter_ndjson_lines_handles_line_over_64k():
+    """A single >64 KiB NDJSON line (e.g. web-search tool result) must survive."""
+    import json
+
+    from grok_proxy.grok_runner import iter_ndjson_lines
+
+    big = json.dumps({"type": "tool_result", "result": "X" * 100_000}).encode()
+    data = b'{"type": "text", "text": "a"}\n' + big + b'\n{"type": "end"}\n'
+    lines = [line async for line in iter_ndjson_lines(_reader_with(data))]
+    assert len(lines) == 3
+    assert json.loads(lines[1])["result"] == "X" * 100_000
+    assert json.loads(lines[2]) == {"type": "end"}
+
+
+async def test_iter_ndjson_lines_drops_pathological_line_and_continues():
+    from grok_proxy.grok_runner import iter_ndjson_lines
+
+    huge = b"Y" * 300_000  # above the max_line_bytes cap below
+    data = b"first\n" + huge + b"\nlast\n"
+    lines = [
+        line
+        async for line in iter_ndjson_lines(_reader_with(data), max_line_bytes=100_000)
+    ]
+    assert lines == [b"first", b"last"]
+
+
+async def test_iter_ndjson_lines_yields_trailing_line_without_newline():
+    from grok_proxy.grok_runner import iter_ndjson_lines
+
+    lines = [line async for line in iter_ndjson_lines(_reader_with(b"a\nb"))]
+    assert lines == [b"a", b"b"]
