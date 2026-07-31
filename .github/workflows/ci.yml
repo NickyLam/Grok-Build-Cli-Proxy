@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --all-extras
+      - name: Ruff
+        run: uv run ruff check src tests
+      - name: Pyright
+        run: uv run pyright src/grok_proxy || true
+      - name: Unit + integration tests
+        run: uv run pytest -q -m "not grok_e2e"

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import sys
+from pathlib import Path
 
 import uvicorn
 
@@ -13,7 +15,7 @@ from grok_proxy.config import get_settings
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="grok-proxy",
-        description="OpenAI-compatible HTTP proxy for Grok Build CLI",
+        description="Grok Build Agent Gateway (HTTP + MCP)",
     )
     p.add_argument(
         "--host",
@@ -41,7 +43,67 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Generate API key + client config files and exit (do not start server)",
     )
+    p.add_argument(
+        "--mcp-stdio",
+        action="store_true",
+        help="Run MCP tool server on stdin/stdout (for Codex/Qoder/etc.)",
+    )
+    p.add_argument(
+        "--database-path",
+        default=None,
+        help="Override SQLite path for this process",
+    )
     return p.parse_args(argv)
+
+
+def _run_mcp_stdio(settings, database_path: str | None) -> None:
+    from grok_proxy.backends.acp import select_backend
+    from grok_proxy.concurrency import ConcurrencyGate, PerKeyConcurrencyTracker
+    from grok_proxy.grok_runner import GrokRunner
+    from grok_proxy.mcp.server import McpToolRouter, run_mcp_stdio
+    from grok_proxy.permissions.broker import PermissionBroker
+    from grok_proxy.runtime.orchestrator import ResponseOrchestrator
+    from grok_proxy.runtime.process_manager import ProcessManager
+    from grok_proxy.storage.database import open_database
+    from grok_proxy.workspace.manager import WorkspaceManager
+
+    db_path = database_path or settings.database_path or str(
+        Path.home() / ".grok-proxy" / "gateway.db"
+    )
+    db = open_database(db_path)
+    gate = ConcurrencyGate(settings.max_concurrent)
+    per_key = PerKeyConcurrencyTracker()
+    pm = ProcessManager()
+    runner = GrokRunner(settings.grok_bin)
+    backend = select_backend(
+        settings.backend,
+        grok_bin=settings.grok_bin,
+        runner=runner,
+        process_manager=pm,
+    )
+    orch = ResponseOrchestrator(
+        db,
+        backend,
+        workspace=WorkspaceManager(
+            allowlist=settings.cwd_allowlist,
+            allow_in_place=settings.allow_in_place,
+            default_mode=settings.default_workspace_mode,  # type: ignore[arg-type]
+        ),
+        permissions=PermissionBroker(db, permission_timeout_sec=settings.permission_timeout_sec),
+        process_manager=pm,
+        max_concurrent=settings.max_concurrent,
+        gate=gate,
+        per_key_gate=per_key,
+    )
+    router = McpToolRouter(orch, default_model=settings.default_model)
+    try:
+        asyncio.run(run_mcp_stdio(router))
+    finally:
+        try:
+            asyncio.run(orch.shutdown())
+        except Exception:  # noqa: BLE001
+            pass
+        db.close()
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -56,6 +118,16 @@ def main(argv: list[str] | None = None) -> None:
         settings.host = args.host
     if args.port is not None:
         settings.port = args.port
+    if args.database_path:
+        settings.database_path = args.database_path
+
+    if args.mcp_stdio:
+        # Minimal bootstrap for key presence without binding HTTP
+        if not settings.api_key.strip():
+            result = bootstrap_settings(settings, install_workbuddy=False, print_banner=False)
+            settings = result.settings
+        _run_mcp_stdio(settings, args.database_path)
+        return
 
     install_wb: bool | None
     if args.no_install_workbuddy:
@@ -81,3 +153,4 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
+

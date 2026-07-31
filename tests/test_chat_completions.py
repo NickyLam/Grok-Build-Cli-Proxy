@@ -5,8 +5,9 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
+from grok_proxy.backends.base import BackendEvent
+from grok_proxy.backends.fake import FakeBackend
 from grok_proxy.config import Settings, clear_settings_cache
-from grok_proxy.grok_runner import GrokResult
 from grok_proxy.main import create_app
 
 
@@ -22,18 +23,25 @@ def mock_runner_app(tmp_path):
         grok_bin="grok",
         always_approve=True,
         strict_session_cwd=True,
+        database_path=str(tmp_path / "chat.db"),
     )
-    app = create_app(s, bootstrap=False)
-
-    async def fake_run(opts):
-        return GrokResult(
-            text="done",
-            session_id="session-xyz",
-            stop_reason="EndTurn",
-            num_turns=1,
-            usage={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
-            exit_code=0,
-        )
+    # Non-stream chat goes through FakeBackend orchestrator path for determinism.
+    fake = FakeBackend(
+        script=[
+            BackendEvent(type="text", data={"text": "done"}),
+            BackendEvent(
+                type="end",
+                data={
+                    "session_id": "session-xyz",
+                    "stop_reason": "EndTurn",
+                    "num_turns": 1,
+                    "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+                    "text": "done",
+                },
+            ),
+        ]
+    )
+    app = create_app(s, bootstrap=False, backend=fake, database_path=tmp_path / "chat.db")
 
     async def fake_stream(opts):
         yield {"type": "text", "data": "hel"}
@@ -47,8 +55,9 @@ def mock_runner_app(tmp_path):
         }
 
     with TestClient(app) as client:
-        client.app.state.runner.run = AsyncMock(side_effect=fake_run)
         client.app.state.runner.stream = fake_stream
+        client.app.state.runner.run = AsyncMock()
+        client.app.state._fake = fake  # type: ignore[attr-defined]
         yield client, tmp_path
 
 
@@ -69,6 +78,7 @@ def test_chat_non_stream(mock_runner_app):
     assert body["choices"][0]["message"]["content"] == "done"
     assert body["grok"]["session_id"] == "session-xyz"
     assert body["usage"]["total_tokens"] == 3
+    assert body["grok"]["response_id"]
 
 
 def test_chat_stream(mock_runner_app):
@@ -145,8 +155,7 @@ def test_alias_grok_build_remapped(mock_runner_app):
         },
     )
     assert r.status_code == 200, r.text
-    # Mock runner accepts any model; ensure response model field is remapped
     assert r.json()["model"] == "grok-4.5"
-    # And runner was invoked with remapped id
-    call_opts = client.app.state.runner.run.await_args.args[0]
-    assert call_opts.model == "grok-4.5"
+    fake: FakeBackend = client.app.state._fake  # type: ignore[attr-defined]
+    assert fake.started
+    assert fake.started[-1].model == "grok-4.5"

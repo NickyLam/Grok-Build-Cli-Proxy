@@ -3,18 +3,27 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from grok_proxy import __version__
-from grok_proxy.auth import verify_request_auth
+from grok_proxy.api.keys import build_keys_router
+from grok_proxy.api.permissions import build_permissions_router
+from grok_proxy.api.responses import build_responses_router
+from grok_proxy.api_keys import ApiKeyStore
+from grok_proxy.auth import authenticate_request, get_auth_context
+from grok_proxy.backends.acp import select_backend
 from grok_proxy.bootstrap import bootstrap_settings
-from grok_proxy.concurrency import ConcurrencyGate
+from grok_proxy.concurrency import ConcurrencyGate, PerKeyConcurrencyTracker
 from grok_proxy.config import Settings, cwd_is_allowed, get_settings, resolve_cwd
 from grok_proxy.errors import ProxyError, http_exception_handler, proxy_error_handler
-from grok_proxy.grok_runner import GrokResult, GrokRunOptions, GrokRunner, map_usage
+from grok_proxy.grok_runner import GrokResult, GrokRunner, GrokRunOptions, map_usage
+from grok_proxy.mcp.server import McpToolRouter
+from grok_proxy.metrics import MetricsRegistry
+from grok_proxy.model_resolve import RuntimeModels, resolve_request_model, resolve_runtime_models
 from grok_proxy.models import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -25,12 +34,23 @@ from grok_proxy.models import (
     ModelList,
     Usage,
 )
-from grok_proxy.model_resolve import RuntimeModels, resolve_request_model, resolve_runtime_models
 from grok_proxy.openai_sse import new_completion_id, stream_openai_sse
+from grok_proxy.permissions.broker import PermissionBroker
 from grok_proxy.prompt_builder import build_prompt
+from grok_proxy.request_context import RequestContextMiddleware
+from grok_proxy.runtime.commands import CreateResponseCommand, GrokExtensions
+from grok_proxy.runtime.orchestrator import ResponseOrchestrator
+from grok_proxy.runtime.process_manager import ProcessManager
+from grok_proxy.scopes import Scope
 from grok_proxy.session_store import SessionStore
+from grok_proxy.storage.database import open_database
+from grok_proxy.workspace.manager import WorkspaceManager
 
 logger = logging.getLogger("grok_proxy")
+
+
+def _default_db_path() -> Path:
+    return Path.home() / ".grok-proxy" / "gateway.db"
 
 
 def create_app(
@@ -40,14 +60,14 @@ def create_app(
     install_workbuddy: bool | None = None,
     print_banner: bool = False,
     runtime_models: RuntimeModels | None = None,
+    backend: Any | None = None,
+    database_path: str | Path | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         cfg = settings if settings is not None else get_settings()
         models_rt = runtime_models
         if bootstrap:
-            # Auto-generate API key if missing; write client-config for WorkBuddy etc.
-            # Banner is usually printed by CLI; uvicorn import path may print once.
             result = bootstrap_settings(
                 cfg,
                 install_workbuddy=install_workbuddy,
@@ -63,29 +83,83 @@ def create_app(
                 configured_models=cfg.models,
                 grok_bin=cfg.grok_bin,
             )
-            # Keep settings in sync when not full-bootstrapped (tests may pass fixed model)
             if cfg.default_model in ("", "auto", "grok-build", "default"):
                 cfg.default_model = models_rt.default_model
+
         app.state.settings = cfg
         app.state.runtime_models = models_rt
         app.state.gate = ConcurrencyGate(cfg.max_concurrent)
+        app.state.per_key_gate = PerKeyConcurrencyTracker()
         app.state.runner = GrokRunner(cfg.grok_bin)
         app.state.sessions = SessionStore()
+        app.state.process_manager = ProcessManager()
+
+        db_path = database_path or cfg.database_path or str(_default_db_path())
+        app.state.db = open_database(db_path)
+        app.state.workspace = WorkspaceManager(
+            allowlist=cfg.cwd_allowlist,
+            allow_in_place=cfg.allow_in_place,
+            default_mode=cfg.default_workspace_mode,  # type: ignore[arg-type]
+        )
+        app.state.permissions = PermissionBroker(
+            app.state.db,
+            permission_timeout_sec=cfg.permission_timeout_sec,
+        )
+        app.state.key_store = ApiKeyStore(app.state.db, pepper=cfg.api_key[:16] if cfg.api_key else "")
+        app.state.metrics = MetricsRegistry()
+
+        selected = backend
+        if selected is None:
+            selected = select_backend(
+                cfg.backend,
+                grok_bin=cfg.grok_bin,
+                runner=app.state.runner,
+                process_manager=app.state.process_manager,
+            )
+        app.state.backend = selected
+        app.state.orchestrator = ResponseOrchestrator(
+            app.state.db,
+            selected,
+            workspace=app.state.workspace,
+            permissions=app.state.permissions,
+            process_manager=app.state.process_manager,
+            max_concurrent=cfg.max_concurrent,
+            gate=app.state.gate,
+            per_key_gate=app.state.per_key_gate,
+        )
+        app.state.mcp = McpToolRouter(
+            app.state.orchestrator,
+            default_model=cfg.default_model,
+        )
+
         logger.info(
-            "grok-proxy v%s host=%s port=%s max_concurrent=%s model=%s",
+            "grok-proxy v%s host=%s port=%s max_concurrent=%s model=%s backend=%s db=%s",
             __version__,
             cfg.host,
             cfg.port,
             cfg.max_concurrent,
             cfg.default_model,
+            getattr(getattr(selected, "capabilities", None), "name", type(selected).__name__),
+            db_path,
         )
-        yield
+        try:
+            yield
+        finally:
+            try:
+                await app.state.orchestrator.shutdown()
+            except Exception:  # noqa: BLE001
+                logger.exception("orchestrator shutdown failed")
+            try:
+                app.state.db.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     app = FastAPI(
         title="Grok Build CLI Proxy",
         version=__version__,
         lifespan=lifespan,
     )
+    app.add_middleware(RequestContextMiddleware)
     app.add_exception_handler(ProxyError, proxy_error_handler)
     from fastapi import HTTPException
 
@@ -95,12 +169,15 @@ def create_app(
         return request.app.state.settings
 
     def require_auth(request: Request, cfg: Settings = Depends(get_cfg)) -> None:
-        verify_request_auth(request, cfg)
+        key_store = getattr(request.app.state, "key_store", None)
+        authenticate_request(request, cfg, key_store=key_store)
 
     def health_payload(request: Request) -> dict[str, Any]:
         gate: ConcurrencyGate = request.app.state.gate
         cfg: Settings = request.app.state.settings
         host = cfg.host if cfg.host not in ("0.0.0.0", "::") else "127.0.0.1"
+        backend = getattr(request.app.state, "backend", None)
+        backend_name = getattr(getattr(backend, "capabilities", None), "name", None)
         return {
             "status": "ok",
             "version": __version__,
@@ -109,12 +186,75 @@ def create_app(
             "default_model": cfg.default_model,
             "base_url": f"http://{host}:{cfg.port}/v1",
             "model_id": cfg.default_model,
-            # api_key intentionally omitted from health (see /v1/connection with auth)
+            "backend": backend_name,
         }
+
+    def ready_payload(request: Request) -> dict[str, Any]:
+        cfg: Settings = request.app.state.settings
+        checks: dict[str, Any] = {
+            "database": False,
+            "grok_bin": False,
+            "backend": False,
+            "workspace": True,
+        }
+        try:
+            request.app.state.db.get_response("__health_probe__")
+            checks["database"] = True
+        except Exception:  # noqa: BLE001
+            try:
+                _ = request.app.state.db
+                checks["database"] = True
+            except Exception:  # noqa: BLE001
+                checks["database"] = False
+        from shutil import which
+
+        checks["grok_bin"] = bool(which(cfg.grok_bin) or Path(cfg.grok_bin).is_file())
+        backend = getattr(request.app.state, "backend", None)
+        checks["backend"] = backend is not None
+        # Refresh gauges
+        metrics: MetricsRegistry | None = getattr(request.app.state, "metrics", None)
+        gate: ConcurrencyGate = request.app.state.gate
+        if metrics is not None:
+            metrics.set_gauge("responses_active", float(gate.in_flight))
+            try:
+                metrics.set_gauge(
+                    "permissions_pending",
+                    float(request.app.state.db.count_pending_permissions()),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        ok = checks["database"]
+        return {"status": "ready" if ok else "not_ready", "checks": checks}
 
     @app.get("/health")
     async def health(request: Request) -> dict[str, Any]:
         return health_payload(request)
+
+    @app.get("/ready")
+    async def ready(request: Request) -> dict[str, Any]:
+        return ready_payload(request)
+
+    @app.get("/metrics")
+    async def metrics_endpoint(request: Request):
+        from fastapi.responses import PlainTextResponse
+
+        metrics: MetricsRegistry = request.app.state.metrics
+        gate: ConcurrencyGate = request.app.state.gate
+        metrics.set_gauge("responses_active", float(gate.in_flight))
+        try:
+            metrics.set_gauge(
+                "permissions_pending",
+                float(request.app.state.db.count_pending_permissions()),
+            )
+            for status, count in request.app.state.db.count_responses_by_status().items():
+                metrics.set_gauge("responses_by_status", float(count), status=status)
+        except Exception:  # noqa: BLE001
+            pass
+        backend = getattr(request.app.state, "backend", None)
+        fo = getattr(backend, "failover_count", None)
+        if fo is not None:
+            metrics.set_gauge("backend_failovers_total", float(fo))
+        return PlainTextResponse(metrics.render_prometheus(), media_type="text/plain; version=0.0.4")
 
     @app.get("/v1/health")
     async def v1_health(request: Request, _: None = Depends(require_auth)) -> dict[str, Any]:
@@ -126,7 +266,6 @@ def create_app(
         _: None = Depends(require_auth),
         cfg: Settings = Depends(get_cfg),
     ) -> dict[str, Any]:
-        """Return base_url / api_key / model_id for agent clients (auth required)."""
         host = cfg.host if cfg.host not in ("0.0.0.0", "::") else "127.0.0.1"
         base_url = f"http://{host}:{cfg.port}/v1"
         return {
@@ -192,6 +331,7 @@ def create_app(
         result: GrokResult,
         *,
         model: str,
+        response_id: str | None = None,
     ) -> ChatCompletionResponse:
         pt, ct, tt = map_usage(result.usage)
         return ChatCompletionResponse(
@@ -216,8 +356,90 @@ def create_app(
                 request_id=result.request_id,
                 raw_usage=result.usage,
                 exit_code=result.exit_code,
+                response_id=response_id,
             ),
         )
+
+    def _chat_to_command(
+        body: ChatCompletionRequest,
+        *,
+        cfg: Settings,
+        prompt: str,
+        rules: str | None,
+        cwd: str,
+        model: str,
+        stream: bool,
+    ) -> CreateResponseCommand:
+        xg = GrokExtensions(
+            cwd=cwd,
+            session_id=body.session_id,
+            max_turns=body.max_turns,
+            sandbox=body.sandbox,
+            rules=rules,
+            always_approve=body.resolved_always_approve(cfg.always_approve),
+            tools_allow=body.tools_allow,
+            tools_deny=body.tools_deny,
+            permission_mode=body.permission_mode,
+            allow=body.allow,
+            deny=body.deny,
+            reasoning_effort=body.reasoning_effort,
+            worktree=body.worktree,
+            timeout_sec=body.timeout_sec if body.timeout_sec is not None else cfg.default_timeout_sec,
+            workspace_mode="read_only",
+            include_thoughts=body.include_thoughts,
+        )
+        # Typed x_grok + model_extra fallback; x_grok wins
+        xg_map: dict[str, Any] = {}
+        if isinstance(body.x_grok, dict):
+            xg_map.update(body.x_grok)
+        extra = getattr(body, "model_extra", None) or {}
+        if isinstance(extra.get("x_grok"), dict):
+            xg_map.update(extra["x_grok"])
+        for k, v in xg_map.items():
+            if hasattr(xg, k) and v is not None:
+                setattr(xg, k, v)
+        return CreateResponseCommand(
+            model=model,
+            input_text=prompt,
+            stream=stream,
+            background=False,
+            x_grok=xg,
+            default_always_approve=cfg.always_approve,
+            default_timeout_sec=cfg.default_timeout_sec,
+            default_cwd=cfg.default_cwd,
+        )
+
+    def _chat_command_with_auth(
+        body: ChatCompletionRequest,
+        *,
+        cfg: Settings,
+        prompt: str,
+        rules: str | None,
+        cwd: str,
+        model: str,
+        stream: bool,
+        request: Request,
+    ) -> CreateResponseCommand:
+        from grok_proxy.request_context import get_request_id
+
+        cmd = _chat_to_command(
+            body, cfg=cfg, prompt=prompt, rules=rules, cwd=cwd, model=model, stream=stream
+        )
+        auth = get_auth_context(request)
+        cmd.actor_id = auth.actor_id
+        cmd.actor_type = auth.actor_type
+        cmd.actor_max_concurrent = auth.max_concurrent
+        cmd.request_id = get_request_id(request)
+        cmd.metadata = {
+            **cmd.metadata,
+            "actor_id": auth.actor_id,
+            "actor_type": auth.actor_type,
+            "request_id": cmd.request_id,
+        }
+        if auth.max_runtime_sec is not None:
+            cur = cmd.x_grok.timeout_sec or cfg.default_timeout_sec
+            cmd.x_grok.timeout_sec = min(int(cur), int(auth.max_runtime_sec))
+        return cmd
 
     def _build_run_options(
         body: ChatCompletionRequest,
@@ -259,12 +481,18 @@ def create_app(
         _: None = Depends(require_auth),
         cfg: Settings = Depends(get_cfg),
     ):
+        auth = get_auth_context(request)
+        auth.require_scopes(Scope.RESPONSE_CREATE.value)
+
         sessions: SessionStore = request.app.state.sessions
         runner: GrokRunner = request.app.state.runner
         gate: ConcurrencyGate = request.app.state.gate
         runtime: RuntimeModels = request.app.state.runtime_models
+        orch: ResponseOrchestrator = request.app.state.orchestrator
+        metrics: MetricsRegistry = request.app.state.metrics
 
         cwd = _resolve_request_cwd(body, cfg)
+        auth.check_workspace(cwd)
         if body.session_id:
             sessions.check_cwd(body.session_id, cwd, strict=cfg.strict_session_cwd)
 
@@ -273,26 +501,29 @@ def create_app(
         model = resolve_request_model(body.model or cfg.default_model, runtime)
 
         logger.info(
-            "chat.completions model=%s requested=%s cwd=%s stream=%s resume=%s prompt_chars=%s",
+            "chat.completions model=%s requested=%s cwd=%s stream=%s resume=%s prompt_chars=%s actor=%s",
             model,
             body.model,
             cwd,
             body.stream,
             bool(body.session_id),
             len(prompt),
+            auth.actor_id,
         )
+        metrics.inc("chat_completions_total", stream=str(body.stream).lower())
 
-        opts = _build_run_options(
-            body,
-            cfg=cfg,
-            prompt=prompt,
-            rules=rules,
-            cwd=cwd,
-            stream=body.stream,
-            runtime=runtime,
-        )
-
+        # Streaming: keep OpenAI SSE path via runner for WorkBuddy/SDK compatibility.
+        # HeadlessBackend still benefits non-stream orchestrator path.
         if body.stream:
+            opts = _build_run_options(
+                body,
+                cfg=cfg,
+                prompt=prompt,
+                rules=rules,
+                cwd=cwd,
+                stream=True,
+                runtime=runtime,
+            )
             await gate.acquire()
 
             async def event_source():
@@ -325,11 +556,41 @@ def create_app(
                 },
             )
 
-        async with gate:
-            result = await runner.run(opts)
-        if result.session_id:
-            sessions.remember(result.session_id, cwd)
-        return JSONResponse(content=_to_openai_response(result, model=model).model_dump())
+        # Non-stream: CreateResponseCommand → Orchestrator → Backend
+        cmd = _chat_command_with_auth(
+            body,
+            cfg=cfg,
+            prompt=prompt,
+            rules=rules,
+            cwd=cwd,
+            model=model,
+            stream=False,
+            request=request,
+        )
+        rec = await orch.create(cmd)
+        if rec.session_id:
+            sessions.remember(rec.session_id, cwd)
+
+        if rec.status == "failed":
+            raise ProxyError(
+                rec.error_message or "response failed",
+                status_code=502,
+                code=rec.error_code or "response_failed",
+            )
+
+        result = GrokResult(
+            text=rec.text,
+            session_id=rec.session_id,
+            stop_reason="EndTurn" if rec.status == "completed" else rec.status,
+            usage=rec.usage_json,
+            exit_code=0 if rec.status == "completed" else 1,
+        )
+        payload = _to_openai_response(result, model=model, response_id=rec.id).model_dump()
+        return JSONResponse(content=payload)
+
+    app.include_router(build_responses_router(require_auth=require_auth, get_cfg=get_cfg))
+    app.include_router(build_permissions_router(require_auth=require_auth))
+    app.include_router(build_keys_router(require_auth=require_auth))
 
     return app
 

@@ -1,7 +1,7 @@
 [project]
 name = "grok-build-cli-proxy"
-version = "0.1.0"
-description = "OpenAI-compatible HTTP proxy for Grok Build CLI (headless coding agent)"
+version = "0.2.0"
+description = "OpenAI-compatible Agent Gateway for Grok Build CLI (Responses API, ACP, MCP)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -18,6 +18,8 @@ dev = [
   "httpx>=0.27.0",
   "pytest>=8.3.0",
   "pytest-asyncio>=0.24.0",
+  "ruff>=0.8.0",
+  "pyright>=1.1.390",
 ]
 
 [project.scripts]
@@ -35,10 +37,33 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "unit: unit tests",
+  "integration: integration tests with FakeBackend",
+  "grok_e2e: requires real grok binary",
+  "client_compat: client compatibility checks",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "B008"]
+
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+reportMissingImports = true
 
 [dependency-groups]
 dev = [
   "httpx>=0.27.0",
   "pytest>=8.3.0",
   "pytest-asyncio>=0.24.0",
+  "ruff>=0.8.0",
+  "pyright>=1.1.390",
 ]

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="100" viewBox="0 0 1200 100" role="img" aria-labelledby="title desc">
+  <title id="title">Quick start</title>
+  <desc id="desc">Install and run the gateway in three steps.</desc>
+  <rect width="1200" height="100" rx="18" fill="#0B0F14"/>
+  <rect x="1" y="1" width="1198" height="98" rx="17" fill="none" stroke="#243041"/>
+  <rect x="0" y="28" width="5" height="44" rx="2" fill="#5B9FFF"/>
+  <text x="40" y="42" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" letter-spacing="2">GET STARTED</text>
+  <text x="40" y="74" fill="#E8EEF5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif" font-size="28" font-weight="700">From clone to first request in under a minute</text>
+</svg>

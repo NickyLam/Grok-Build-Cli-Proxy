@@ -67,6 +67,8 @@ class ChatCompletionRequest(BaseModel):
     worktree: str | bool | None = None
     timeout_sec: int | None = None
     include_thoughts: bool = False
+    # Scheme B: nested extensions (wins over top-level when both set)
+    x_grok: dict[str, Any] | None = None
 
     @field_validator("messages")
     @classmethod
@@ -79,6 +81,26 @@ class ChatCompletionRequest(BaseModel):
     def normalize_cwd(self) -> ChatCompletionRequest:
         if self.cwd is None and self.working_directory is not None:
             self.cwd = self.working_directory
+        # Apply x_grok overrides (x_grok wins)
+        if self.x_grok:
+            if self.x_grok.get("cwd"):
+                self.cwd = str(self.x_grok["cwd"])
+            if self.x_grok.get("session_id") is not None:
+                self.session_id = self.x_grok.get("session_id")
+            if self.x_grok.get("max_turns") is not None:
+                self.max_turns = self.x_grok.get("max_turns")
+            if self.x_grok.get("always_approve") is not None:
+                self.always_approve = bool(self.x_grok.get("always_approve"))
+            if self.x_grok.get("worktree") is not None:
+                self.worktree = self.x_grok.get("worktree")
+            if self.x_grok.get("timeout_sec") is not None:
+                self.timeout_sec = self.x_grok.get("timeout_sec")
+            if self.x_grok.get("sandbox") is not None:
+                self.sandbox = self.x_grok.get("sandbox")
+            if self.x_grok.get("rules") is not None:
+                self.rules = self.x_grok.get("rules")
+            if self.x_grok.get("include_thoughts") is not None:
+                self.include_thoughts = bool(self.x_grok.get("include_thoughts"))
         return self
 
     def resolved_always_approve(self, default: bool) -> bool:
@@ -115,6 +137,7 @@ class GrokMeta(BaseModel):
     request_id: str | None = None
     raw_usage: dict[str, Any] | None = None
     exit_code: int | None = None
+    response_id: str | None = None
 
 
 class ChatCompletionResponse(BaseModel):

@@ -7,12 +7,12 @@ from grok_proxy.bootstrap import bootstrap_settings
 from grok_proxy.config import Settings, clear_settings_cache
 from grok_proxy.credentials import (
     API_KEY_PREFIX,
+    build_connection_info,
     ensure_api_key,
     generate_api_key,
     install_workbuddy_model,
     load_persisted_api_key,
     write_client_config_files,
-    build_connection_info,
 )
 
 

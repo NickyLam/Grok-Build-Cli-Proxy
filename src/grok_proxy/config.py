@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -80,6 +79,27 @@ class Settings(BaseSettings):
     models: str = Field(
         default="",
         validation_alias=_alias("GROK_PROXY_MODELS", "models"),
+    )
+    # Scheme B extensions
+    backend: str = Field(
+        default="headless",
+        validation_alias=_alias("GROK_PROXY_BACKEND", "backend"),
+    )
+    database_path: str = Field(
+        default="",
+        validation_alias=_alias("GROK_PROXY_DATABASE_PATH", "database_path"),
+    )
+    allow_in_place: bool = Field(
+        default=False,
+        validation_alias=_alias("GROK_PROXY_ALLOW_IN_PLACE", "allow_in_place"),
+    )
+    default_workspace_mode: str = Field(
+        default="read_only",
+        validation_alias=_alias("GROK_PROXY_DEFAULT_WORKSPACE_MODE", "default_workspace_mode"),
+    )
+    permission_timeout_sec: int = Field(
+        default=900,
+        validation_alias=_alias("GROK_PROXY_PERMISSION_TIMEOUT_SEC", "permission_timeout_sec"),
     )
 
     @field_validator("cwd_allowlist", mode="before")

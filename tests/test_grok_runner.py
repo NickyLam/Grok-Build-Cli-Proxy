@@ -23,6 +23,20 @@ def test_build_argv_basic():
     assert "--output-format" in cmd and "json" in cmd
 
 
+def test_build_argv_prompt_file():
+    opts = GrokRunOptions(
+        prompt="",
+        model="m",
+        cwd="/tmp",
+        prompt_file="/secret/prompt.txt",
+    )
+    cmd = build_grok_argv(opts)
+    assert "--prompt-file" in cmd
+    assert "/secret/prompt.txt" in cmd
+    assert "hi" not in cmd
+    assert "-p" not in cmd
+
+
 def test_build_argv_stream():
     opts = GrokRunOptions(prompt="x", model="m", cwd="/tmp", stream=True)
     cmd = build_grok_argv(opts)

@@ -6,7 +6,7 @@ import os
 import secrets
 import stat
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 logger = logging.getLogger("grok_proxy")
@@ -139,7 +139,7 @@ def build_connection_info(
         port=port,
         model_id=model_id,
         base_url=base_url,
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        generated_at=datetime.now(UTC).isoformat(),
         source=source,
     )
 

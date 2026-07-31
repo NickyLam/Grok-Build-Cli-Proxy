@@ -36,6 +36,8 @@ class GrokRunOptions:
     timeout_sec: int = 600
     grok_bin: str = "grok"
     env: dict[str, str] | None = None
+    # When set, argv uses --prompt-file instead of embedding prompt after -p
+    prompt_file: str | None = None
 
 
 @dataclass
@@ -54,18 +56,22 @@ class GrokResult:
 
 def build_grok_argv(opts: GrokRunOptions) -> list[str]:
     fmt = "streaming-json" if opts.stream else "json"
-    cmd: list[str] = [
-        opts.grok_bin,
-        "-p",
-        opts.prompt,
-        "-m",
-        opts.model,
-        "--cwd",
-        opts.cwd,
-        "--output-format",
-        fmt,
-        "--no-auto-update",
-    ]
+    cmd: list[str] = [opts.grok_bin]
+    if opts.prompt_file:
+        cmd.extend(["--prompt-file", opts.prompt_file])
+    else:
+        cmd.extend(["-p", opts.prompt])
+    cmd.extend(
+        [
+            "-m",
+            opts.model,
+            "--cwd",
+            opts.cwd,
+            "--output-format",
+            fmt,
+            "--no-auto-update",
+        ]
+    )
     if opts.always_approve:
         cmd.append("--always-approve")
     if opts.session_id:
@@ -120,7 +126,7 @@ async def _terminate_process(proc: asyncio.subprocess.Process) -> None:
         return
     try:
         await asyncio.wait_for(proc.wait(), timeout=5)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         try:
             if os.name != "nt" and proc.pid:
                 try:
@@ -225,7 +231,7 @@ class GrokRunner:
                 proc.communicate(),
                 timeout=opts.timeout_sec,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await _terminate_process(proc)
             raise ProxyError(
                 f"Grok timed out after {opts.timeout_sec}s",
@@ -266,7 +272,7 @@ class GrokRunner:
                     status_code=502,
                     code="grok_bad_json",
                     details={"exit_code": code, "stderr_tail": stderr_tail},
-                )
+                ) from None
 
         if not isinstance(payload, dict):
             raise ProxyError("Grok JSON root must be an object", status_code=502, code="grok_bad_json")
@@ -352,7 +358,7 @@ class GrokRunner:
             else:
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=2)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     await _terminate_process(proc)
             await asyncio.gather(stderr_task, return_exceptions=True)
 
