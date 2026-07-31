@@ -6,8 +6,9 @@ The proxy exposes tools over **MCP-style JSON-RPC on stdio**:
 uv run grok-proxy --mcp-stdio
 ```
 
-This is a **lightweight stdio protocol** implemented by the gateway (tools/list + tools/call).  
-If your client requires the full official MCP SDK feature set, verify with the smoke script first.
+This speaks **standard MCP JSON-RPC on stdio**: `initialize` handshake,
+`notifications/*`, `ping`, `tools/list`, and `tools/call` (content-array results).
+Works with official MCP SDK clients (Codex, Qoder, CodeBuddy, Claude-style hosts).
 
 ## Tools
 

@@ -37,6 +37,7 @@ export GROK_PROXY_MODEL="$(python3 -c 'import json;print(json.load(open(__import
 | WorkBuddy | Custom model | [workbuddy.md](./workbuddy.md) |
 | Codex (and similar agents) | MCP stdio | [codex-mcp.md](./codex-mcp.md) |
 | Qoder / CodeBuddy | MCP stdio (same shape) | [codex-mcp.md](./codex-mcp.md#qoder--codebuddy) |
+| OpenCode / Pi Agent / Trae CN | OpenAI-compatible model provider | [README § Agent clients](../../README.md#agent-clients) |
 
 ## Smoke tests (automated)
 

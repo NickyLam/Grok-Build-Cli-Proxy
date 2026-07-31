@@ -11,7 +11,7 @@
   <a href="#quick-start">Quick start</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#api-essentials">API</a> ·
-  <a href="#client-integration--e2e">Clients</a> ·
+  <a href="#agent-clients">Clients</a> ·
   <a href="#security">Security</a> ·
   <a href="docs/clients/README.md">Integration guide</a> ·
   <a href="docs/ACP.md">ACP</a>
@@ -147,7 +147,7 @@ print(r.choices[0].message.content)
 | GET | `/ready` | no | DB + binary readiness |
 | GET | `/metrics` | no | Prometheus text |
 | GET | `/v1/models` | yes | Model list |
-| GET | `/v1/connection` | yes | Client config snapshot |
+| GET | `/v1/connection` | yes (master key only) | Client config snapshot |
 | POST | `/v1/chat/completions` | yes | Coding agent (compat) |
 | POST | `/v1/responses` | yes | Create task |
 | GET | `/v1/responses/{id}` | yes | Status / output |
@@ -240,6 +240,185 @@ See [docs/ACP.md](docs/ACP.md).
 
 ---
 
+## Agent clients
+
+Two integration modes — pick per client:
+
+1. **OpenAI-compatible HTTP** — the client treats the gateway as a chat-completions model provider (`http://127.0.0.1:8787/v1`). Needs `uv run grok-proxy` running.
+2. **MCP stdio** — the client spawns `grok-proxy --mcp-stdio` and calls tools (`grok_consult` / `grok_review` / `grok_delegate` …). No pre-started HTTP server needed; shares the same SQLite journal.
+
+| Client | Mode | Config surface |
+|--------|------|----------------|
+| [WorkBuddy](#workbuddy-1) | HTTP model | `~/.workbuddy/models.json` (auto-install) |
+| [Qoder](#qoder) | MCP stdio | Qoder Settings → MCP |
+| [Codex](#codex) | MCP stdio **or** HTTP model | `~/.codex/config.toml` |
+| [OpenCode](#opencode) | HTTP model | `opencode.json` |
+| [Pi Agent](#pi-agent) | HTTP model | `~/.pi/agent/models.json` |
+| [Trae CN](#trae-cn) | HTTP model (+ MCP) | 设置 → 模型 → 添加模型 |
+| CodeBuddy | MCP stdio | same shape as Qoder |
+
+Common setup (HTTP mode):
+
+```bash
+cd Grok-Build-Cli-Proxy
+uv run grok-proxy                                   # gateway on 127.0.0.1:8787
+export GROK_PROXY_API_KEY="$(cat ~/.grok-proxy/api_key)"
+```
+
+MCP command (both forms work; the absolute venv binary starts faster and avoids uv cache issues):
+
+```text
+/absolute/path/to/Grok-Build-Cli-Proxy/.venv/bin/grok-proxy --mcp-stdio
+# or: uv run --directory /absolute/path/to/Grok-Build-Cli-Proxy grok-proxy --mcp-stdio
+```
+
+> **Important for HTTP-mode clients**: `/v1/chat/completions` runs a *coding agent*, and the working
+> directory defaults to the proxy's `GROK_PROXY_DEFAULT_CWD` (or the directory the proxy was started
+> from) when the client cannot send a `cwd` field. Generic clients (OpenCode / Pi / Trae) cannot —
+> so either set `GROK_PROXY_DEFAULT_CWD=/path/to/project` before starting the proxy, or start the
+> proxy from the project directory. Also raise the client's request timeout if configurable: agent
+> runs take minutes, not seconds.
+
+### WorkBuddy
+
+```bash
+uv run grok-proxy --install-workbuddy   # upserts ~/.workbuddy/models.json and starts the gateway
+```
+
+Or add a Custom model manually from `~/.grok-proxy/workbuddy-model.json`:
+**url** = `http://127.0.0.1:8787/v1`, **apiKey** = contents of `~/.grok-proxy/api_key`,
+**id** = `grok-4.5` (a real id from `grok models`, not the legacy alias `grok-build`).
+Restart / refresh WorkBuddy models afterwards.
+
+### Qoder
+
+Settings → MCP → Add server (stdio):
+
+```json
+{
+  "mcpServers": {
+    "grok": {
+      "command": "/absolute/path/to/Grok-Build-Cli-Proxy/.venv/bin/grok-proxy",
+      "args": ["--mcp-stdio"]
+    }
+  }
+}
+```
+
+Qoder then lists 7 tools. In chat, ask e.g. "use `grok_consult` to analyze this architecture" or
+"delegate this refactor to `grok_delegate`, then poll `grok_status`". `grok_consult` / `grok_review`
+are read-only; `grok_delegate` runs in an isolated git worktree with `permission_policy=ask` by default.
+
+### Codex
+
+**Option A — MCP server** (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.grok]
+command = "/absolute/path/to/Grok-Build-Cli-Proxy/.venv/bin/grok-proxy"
+args = ["--mcp-stdio"]
+```
+
+**Option B — use Grok as Codex's model** (OpenAI-compatible provider; gateway must be running):
+
+```toml
+# ~/.codex/config.toml
+model = "grok-4.5"
+model_provider = "grok-proxy"
+
+[model_providers.grok-proxy]
+name = "grok-proxy"
+base_url = "http://127.0.0.1:8787/v1"
+env_key = "GROK_PROXY_API_KEY"   # export it in the shell that launches codex
+wire_api = "chat"
+```
+
+### OpenCode
+
+Project `opencode.json` (or `~/.config/opencode/opencode.json`):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "grok-proxy": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Grok Proxy (local)",
+      "options": {
+        "baseURL": "http://127.0.0.1:8787/v1",
+        "apiKey": "{env:GROK_PROXY_API_KEY}"
+      },
+      "models": {
+        "grok-4.5": { "name": "Grok 4.5 (Grok Build CLI)" }
+      }
+    }
+  },
+  "model": "grok-proxy/grok-4.5"
+}
+```
+
+Alternatively run `opencode auth login` → *Other* → provider id `grok-proxy` to store the key instead
+of the env placeholder. Since the gateway is itself a full agent, a lightweight OpenCode agent/mode
+(few or no local tools) works best — let Grok do the editing.
+
+### Pi Agent
+
+`~/.pi/agent/models.json`:
+
+```json
+{
+  "providers": {
+    "grok-proxy": {
+      "baseUrl": "http://127.0.0.1:8787/v1",
+      "api": "openai-completions",
+      "apiKey": "sk-gp-…",
+      "compat": { "supportsDeveloperRole": false },
+      "models": [
+        { "id": "grok-4.5", "contextWindow": 131072, "maxTokens": 16384 }
+      ]
+    }
+  }
+}
+```
+
+Put the value of `~/.grok-proxy/api_key` into `apiKey` (or keep a placeholder and store the key via
+`/login`). Then pick the model inside pi with `/model` → `grok-proxy/grok-4.5`.
+`supportsDeveloperRole: false` makes pi send a plain `system` message, which the prompt builder maps cleanly.
+
+### Trae CN
+
+Trae 国内版支持自定义模型（OpenAI 兼容协议）：
+
+1. 设置 → 模型 → **添加模型** → 选择 **自定义配置**
+2. API 格式：**兼容 OpenAI**
+3. 请求地址（Base URL）：`http://127.0.0.1:8787/v1`（Trae 会自行拼接 `/chat/completions`；若要求完整地址则填 `http://127.0.0.1:8787/v1/chat/completions`）
+4. 模型 ID：`grok-4.5`，API Key：`~/.grok-proxy/api_key` 文件内容
+5. 保存时 Trae 会发一次连通性测试请求 —— 网关和 grok CLI 登录态需可用（会消耗少量 token）
+
+Trae 的 MCP 面板同样可以添加 stdio 服务器，命令与 [Qoder](#qoder) 一致。
+
+### Security for third-party agents
+
+Give each agent its own **scoped key** instead of the master key (no self-approval, workspace-limited):
+
+```bash
+curl -s http://127.0.0.1:8787/v1/keys \
+  -H "Authorization: Bearer $(cat ~/.grok-proxy/api_key)" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "opencode", "workspace_allowlist": ["'"$HOME"'/projects"], "max_concurrent": 1}'
+```
+
+Approve pending high-risk actions from `grok_delegate` / `permission_policy=ask` with the master key:
+
+```bash
+curl -s "http://127.0.0.1:8787/v1/permissions?status=pending" -H "Authorization: Bearer $MASTER"
+curl -s -X POST "http://127.0.0.1:8787/v1/permissions/<id>/decision" \
+  -H "Authorization: Bearer $MASTER" -H "Content-Type: application/json" \
+  -d '{"decision": "allow_once"}'
+```
+
+---
+
 ## Security
 
 Anyone with a Bearer token can run a **local coding agent** under allowed workspaces.
@@ -289,6 +468,8 @@ uv run pytest -q -m "not grok_e2e"
 ---
 
 ## Client integration & E2E
+
+See the full per-client walkthroughs in [Agent clients](#agent-clients) above.
 
 | Guide | Description |
 |-------|-------------|
