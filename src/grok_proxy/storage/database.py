@@ -284,6 +284,33 @@ class Database:
             ).fetchall()
         return [self._row_to_permission(r) for r in rows]
 
+    def list_permissions(
+        self,
+        *,
+        status: str | None = None,
+        response_id: str | None = None,
+        limit: int = 100,
+    ) -> list[PermissionRecord]:
+        """List permissions with optional filters (newest first by requested_at)."""
+        limit = max(1, min(int(limit), 500))
+        clauses: list[str] = []
+        args: list[Any] = []
+        if status:
+            clauses.append("status = ?")
+            args.append(status)
+        if response_id:
+            clauses.append("response_id = ?")
+            args.append(response_id)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = (
+            f"SELECT * FROM permissions{where} "
+            "ORDER BY requested_at DESC LIMIT ?"
+        )
+        args.append(limit)
+        with self._lock:
+            rows = self._conn.execute(sql, tuple(args)).fetchall()
+        return [self._row_to_permission(r) for r in rows]
+
     def insert_audit(
         self,
         *,

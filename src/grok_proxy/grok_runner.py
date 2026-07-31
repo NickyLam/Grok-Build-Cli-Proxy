@@ -12,6 +12,8 @@ from typing import Any
 
 from grok_proxy.errors import ProxyError
 
+# optional ProcessManager type without hard circular import at type-check time
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,6 +40,8 @@ class GrokRunOptions:
     env: dict[str, str] | None = None
     # When set, argv uses --prompt-file instead of embedding prompt after -p
     prompt_file: str | None = None
+    # Optional id for ProcessManager tracking
+    track_id: str | None = None
 
 
 @dataclass
@@ -187,8 +191,14 @@ def map_usage(usage: dict[str, Any] | None) -> tuple[int, int, int]:
 
 
 class GrokRunner:
-    def __init__(self, grok_bin: str = "grok") -> None:
+    def __init__(
+        self,
+        grok_bin: str = "grok",
+        *,
+        process_manager: Any | None = None,
+    ) -> None:
         self.grok_bin = grok_bin
+        self.process_manager = process_manager
 
     def _ensure_bin(self, binary: str) -> None:
         path = Path(binary)
@@ -298,6 +308,7 @@ class GrokRunner:
         self._ensure_bin(opts.grok_bin)
         cmd = build_grok_argv(opts)
 
+        track_id = getattr(opts, "track_id", None) or f"run_{os.getpid()}_{id(opts)}"
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -312,6 +323,12 @@ class GrokRunner:
                 status_code=503,
                 code="grok_not_found",
             ) from e
+
+        if self.process_manager is not None:
+            try:
+                await self.process_manager.register(str(track_id), proc, kind="stream")
+            except Exception:  # noqa: BLE001
+                logger.exception("process register failed")
 
         assert proc.stdout is not None
         stderr_chunks: list[bytes] = []
@@ -360,6 +377,11 @@ class GrokRunner:
                     await asyncio.wait_for(proc.wait(), timeout=2)
                 except TimeoutError:
                     await _terminate_process(proc)
+            if self.process_manager is not None:
+                try:
+                    await self.process_manager.unregister(str(track_id))
+                except Exception:  # noqa: BLE001
+                    pass
             await asyncio.gather(stderr_task, return_exceptions=True)
 
         if timed_out:

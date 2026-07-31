@@ -209,13 +209,18 @@ class HeadlessBackend:
         prompt_path = self._write_prompt_file(handle.prompt)
         handle.prompt_file = prompt_path
         try:
+            if not req.always_approve:
+                logger.info(
+                    "HeadlessBackend forcing always_approve "
+                    "(interactive permissions unsupported on grok -p)"
+                )
             opts = GrokRunOptions(
                 prompt=handle.prompt if not self.use_prompt_file else "",
                 model=req.model,
                 cwd=req.cwd,
                 stream=True,
                 session_id=req.session_id,
-                always_approve=req.always_approve,
+                always_approve=True,
                 max_turns=req.max_turns,
                 sandbox=req.sandbox,
                 rules=req.rules,
@@ -229,7 +234,11 @@ class HeadlessBackend:
                 timeout_sec=req.timeout_sec,
                 grok_bin=self.grok_bin,
                 prompt_file=str(prompt_path) if self.use_prompt_file else None,
+                track_id=handle.response_id or session.session_id,
             )
+            # Ensure runner can register child PIDs for reclaim/cancel
+            if getattr(self.runner, "process_manager", None) is None:
+                self.runner.process_manager = self.process_manager
             text_acc = 0
             async for raw in self.runner.stream(opts):
                 if handle.cancel_event.is_set():

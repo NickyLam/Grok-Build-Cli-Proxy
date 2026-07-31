@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -25,10 +23,11 @@ def mock_runner_app(tmp_path):
         strict_session_cwd=True,
         database_path=str(tmp_path / "chat.db"),
     )
-    # Non-stream chat goes through FakeBackend orchestrator path for determinism.
+    # Chat (stream + non-stream) goes through FakeBackend orchestrator path.
     fake = FakeBackend(
         script=[
-            BackendEvent(type="text", data={"text": "done"}),
+            BackendEvent(type="text", data={"text": "hel"}),
+            BackendEvent(type="text", data={"text": "lo"}),
             BackendEvent(
                 type="end",
                 data={
@@ -36,27 +35,14 @@ def mock_runner_app(tmp_path):
                     "stop_reason": "EndTurn",
                     "num_turns": 1,
                     "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
-                    "text": "done",
+                    "text": "hello",
                 },
             ),
         ]
     )
     app = create_app(s, bootstrap=False, backend=fake, database_path=tmp_path / "chat.db")
 
-    async def fake_stream(opts):
-        yield {"type": "text", "data": "hel"}
-        yield {"type": "text", "data": "lo"}
-        yield {
-            "type": "end",
-            "sessionId": "session-stream",
-            "stopReason": "EndTurn",
-            "num_turns": 1,
-            "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
-        }
-
     with TestClient(app) as client:
-        client.app.state.runner.stream = fake_stream
-        client.app.state.runner.run = AsyncMock()
         client.app.state._fake = fake  # type: ignore[attr-defined]
         yield client, tmp_path
 
@@ -75,7 +61,7 @@ def test_chat_non_stream(mock_runner_app):
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["choices"][0]["message"]["content"] == "done"
+    assert body["choices"][0]["message"]["content"] == "hello"
     assert body["grok"]["session_id"] == "session-xyz"
     assert body["usage"]["total_tokens"] == 3
     assert body["grok"]["response_id"]
@@ -98,7 +84,9 @@ def test_chat_stream(mock_runner_app):
         text = "".join(r.iter_text())
     assert "data: " in text
     assert "[DONE]" in text
+    # Stream via Orchestrator journal → OpenAI SSE
     assert "hel" in text and "lo" in text
+    assert "response_id" in text
 
 
 def test_resume_session_cwd_mismatch(mock_runner_app):

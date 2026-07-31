@@ -20,7 +20,7 @@ from grok_proxy.bootstrap import bootstrap_settings
 from grok_proxy.concurrency import ConcurrencyGate, PerKeyConcurrencyTracker
 from grok_proxy.config import Settings, cwd_is_allowed, get_settings, resolve_cwd
 from grok_proxy.errors import ProxyError, http_exception_handler, proxy_error_handler
-from grok_proxy.grok_runner import GrokResult, GrokRunner, GrokRunOptions, map_usage
+from grok_proxy.grok_runner import GrokResult, GrokRunner, map_usage
 from grok_proxy.mcp.server import McpToolRouter
 from grok_proxy.metrics import MetricsRegistry
 from grok_proxy.model_resolve import RuntimeModels, resolve_request_model, resolve_runtime_models
@@ -34,7 +34,10 @@ from grok_proxy.models import (
     ModelList,
     Usage,
 )
-from grok_proxy.openai_sse import new_completion_id, stream_openai_sse
+from grok_proxy.openai_sse import (
+    new_completion_id,
+    stream_openai_sse_from_journal,
+)
 from grok_proxy.permissions.broker import PermissionBroker
 from grok_proxy.prompt_builder import build_prompt
 from grok_proxy.request_context import RequestContextMiddleware
@@ -77,6 +80,7 @@ def create_app(
             models_rt = result.runtime_models
         elif not cfg.api_key.strip():
             cfg.require_api_key()
+        cfg.validate_bind_safety()
         if models_rt is None:
             models_rt = resolve_runtime_models(
                 configured_default=cfg.default_model,
@@ -90,9 +94,12 @@ def create_app(
         app.state.runtime_models = models_rt
         app.state.gate = ConcurrencyGate(cfg.max_concurrent)
         app.state.per_key_gate = PerKeyConcurrencyTracker()
-        app.state.runner = GrokRunner(cfg.grok_bin)
         app.state.sessions = SessionStore()
         app.state.process_manager = ProcessManager()
+        reclaimed = app.state.process_manager.reclaim_stale_pids()
+        if reclaimed:
+            logger.warning("reclaimed %s stale child process(es) from previous run", reclaimed)
+        app.state.runner = GrokRunner(cfg.grok_bin, process_manager=app.state.process_manager)
 
         db_path = database_path or cfg.database_path or str(_default_db_path())
         app.state.db = open_database(db_path)
@@ -132,16 +139,25 @@ def create_app(
             default_model=cfg.default_model,
         )
 
+        backend_name = getattr(
+            getattr(selected, "capabilities", None), "name", type(selected).__name__
+        )
         logger.info(
-            "grok-proxy v%s host=%s port=%s max_concurrent=%s model=%s backend=%s db=%s",
+            "grok-proxy v%s host=%s port=%s max_concurrent=%s model=%s backend=%s db=%s always_approve=%s",
             __version__,
             cfg.host,
             cfg.port,
             cfg.max_concurrent,
             cfg.default_model,
-            getattr(getattr(selected, "capabilities", None), "name", type(selected).__name__),
+            backend_name,
             db_path,
+            cfg.effective_always_approve(backend_name=str(backend_name)),
         )
+        if cfg.always_approve and str(backend_name) != "headless":
+            logger.warning(
+                "GROK_PROXY_ALWAYS_APPROVE=true with backend=%s — tools run without human approval",
+                backend_name,
+            )
         try:
             yield
         finally:
@@ -369,14 +385,17 @@ def create_app(
         cwd: str,
         model: str,
         stream: bool,
+        backend_name: str | None = None,
     ) -> CreateResponseCommand:
+        bn = backend_name or cfg.backend
+        default_aa = cfg.effective_always_approve(backend_name=str(bn))
         xg = GrokExtensions(
             cwd=cwd,
             session_id=body.session_id,
             max_turns=body.max_turns,
             sandbox=body.sandbox,
             rules=rules,
-            always_approve=body.resolved_always_approve(cfg.always_approve),
+            always_approve=body.resolved_always_approve(default_aa),
             tools_allow=body.tools_allow,
             tools_deny=body.tools_deny,
             permission_mode=body.permission_mode,
@@ -404,7 +423,7 @@ def create_app(
             stream=stream,
             background=False,
             x_grok=xg,
-            default_always_approve=cfg.always_approve,
+            default_always_approve=default_aa,
             default_timeout_sec=cfg.default_timeout_sec,
             default_cwd=cfg.default_cwd,
         )
@@ -422,8 +441,17 @@ def create_app(
     ) -> CreateResponseCommand:
         from grok_proxy.request_context import get_request_id
 
+        caps = getattr(getattr(request.app.state, "backend", None), "capabilities", None)
+        bn = getattr(caps, "name", None) or cfg.backend
         cmd = _chat_to_command(
-            body, cfg=cfg, prompt=prompt, rules=rules, cwd=cwd, model=model, stream=stream
+            body,
+            cfg=cfg,
+            prompt=prompt,
+            rules=rules,
+            cwd=cwd,
+            model=model,
+            stream=stream,
+            backend_name=str(bn),
         )
         auth = get_auth_context(request)
         cmd.actor_id = auth.actor_id
@@ -441,39 +469,6 @@ def create_app(
             cmd.x_grok.timeout_sec = min(int(cur), int(auth.max_runtime_sec))
         return cmd
 
-    def _build_run_options(
-        body: ChatCompletionRequest,
-        *,
-        cfg: Settings,
-        prompt: str,
-        rules: str | None,
-        cwd: str,
-        stream: bool,
-        runtime: RuntimeModels,
-    ) -> GrokRunOptions:
-        model = resolve_request_model(body.model or cfg.default_model, runtime)
-        timeout = body.timeout_sec if body.timeout_sec is not None else cfg.default_timeout_sec
-        return GrokRunOptions(
-            prompt=prompt,
-            model=model,
-            cwd=cwd,
-            stream=stream,
-            session_id=body.session_id,
-            always_approve=body.resolved_always_approve(cfg.always_approve),
-            max_turns=body.max_turns,
-            sandbox=body.sandbox,
-            rules=rules,
-            tools_allow=body.tools_allow,
-            tools_deny=body.tools_deny,
-            permission_mode=body.permission_mode,
-            allow=body.allow,
-            deny=body.deny,
-            reasoning_effort=body.reasoning_effort,
-            worktree=body.worktree,
-            timeout_sec=timeout,
-            grok_bin=cfg.grok_bin,
-        )
-
     @app.post("/v1/chat/completions")
     async def chat_completions(
         body: ChatCompletionRequest,
@@ -485,8 +480,6 @@ def create_app(
         auth.require_scopes(Scope.RESPONSE_CREATE.value)
 
         sessions: SessionStore = request.app.state.sessions
-        runner: GrokRunner = request.app.state.runner
-        gate: ConcurrencyGate = request.app.state.gate
         runtime: RuntimeModels = request.app.state.runtime_models
         orch: ResponseOrchestrator = request.app.state.orchestrator
         metrics: MetricsRegistry = request.app.state.metrics
@@ -512,39 +505,46 @@ def create_app(
         )
         metrics.inc("chat_completions_total", stream=str(body.stream).lower())
 
-        # Streaming: keep OpenAI SSE path via runner for WorkBuddy/SDK compatibility.
-        # HeadlessBackend still benefits non-stream orchestrator path.
+        # Streaming: CreateResponseCommand (stream+background) → Orchestrator journal → OpenAI SSE
         if body.stream:
-            opts = _build_run_options(
+            cmd = _chat_command_with_auth(
                 body,
                 cfg=cfg,
                 prompt=prompt,
                 rules=rules,
                 cwd=cwd,
+                model=model,
                 stream=True,
-                runtime=runtime,
+                request=request,
             )
-            await gate.acquire()
+            cmd.background = True
+            rec = await orch.create(cmd)
+            await orch.start(rec.id)
+
+            include_usage = bool(
+                body.stream_options and body.stream_options.include_usage
+            )
 
             async def event_source():
-                try:
-                    def on_session(sid: str | None) -> None:
-                        if sid:
-                            sessions.remember(sid, cwd)
+                def on_session(sid: str | None) -> None:
+                    if sid:
+                        sessions.remember(sid, cwd)
 
-                    include_usage = bool(
-                        body.stream_options and body.stream_options.include_usage
-                    )
-                    async for line in stream_openai_sse(
-                        runner.stream(opts),
-                        model=model,
-                        include_thoughts=body.include_thoughts,
-                        include_usage=include_usage,
-                        on_session=on_session,
-                    ):
-                        yield line
-                finally:
-                    await gate.release()
+                async for line in stream_openai_sse_from_journal(
+                    orch.stream_events(rec.id, after_sequence=0),
+                    model=model,
+                    response_id=rec.id,
+                    include_usage=include_usage,
+                    on_session=on_session,
+                ):
+                    yield line
+                # Prefer session from terminal record if stream missed it
+                try:
+                    final = orch.get(rec.id)
+                    if final.session_id:
+                        sessions.remember(final.session_id, cwd)
+                except Exception:  # noqa: BLE001
+                    pass
 
             return StreamingResponse(
                 event_source(),

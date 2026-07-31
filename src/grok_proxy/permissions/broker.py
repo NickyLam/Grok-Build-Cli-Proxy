@@ -87,6 +87,41 @@ class PermissionBroker:
             raise ProxyError("permission not found", status_code=404, code="permission_not_found")
         return rec
 
+    def list(
+        self,
+        *,
+        status: str | None = "pending",
+        response_id: str | None = None,
+        limit: int = 100,
+    ) -> list[PermissionRecord]:
+        return self.db.list_permissions(status=status, response_id=response_id, limit=limit)
+
+    def bulk_decide(
+        self,
+        permission_ids: list[str],
+        *,
+        decision: str,
+        actor_id: str = "api",
+        feedback: str | None = None,
+    ) -> list[PermissionRecord]:
+        out: list[PermissionRecord] = []
+        for pid in permission_ids:
+            try:
+                out.append(
+                    self.decide(
+                        pid,
+                        decision=decision,
+                        actor_id=actor_id,
+                        feedback=feedback,
+                    )
+                )
+            except ProxyError as e:
+                if e.code in ("permission_not_found", "permission_already_decided", "permission_expired"):
+                    # Skip soft failures for bulk ops; caller inspects returned set
+                    continue
+                raise
+        return out
+
     def decide(
         self,
         permission_id: str,

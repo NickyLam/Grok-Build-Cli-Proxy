@@ -67,8 +67,10 @@ class Settings(BaseSettings):
         default="auto",
         validation_alias=_alias("GROK_PROXY_DEFAULT_MODEL", "default_model"),
     )
+    # Safer default for formal gateway use. Headless backend still forces approve
+    # because grok -p cannot interactively wait for human decisions.
     always_approve: bool = Field(
-        default=True,
+        default=False,
         validation_alias=_alias("GROK_PROXY_ALWAYS_APPROVE", "always_approve"),
     )
     strict_session_cwd: bool = Field(
@@ -101,6 +103,33 @@ class Settings(BaseSettings):
         default=900,
         validation_alias=_alias("GROK_PROXY_PERMISSION_TIMEOUT_SEC", "permission_timeout_sec"),
     )
+    allow_public_bind: bool = Field(
+        default=False,
+        validation_alias=_alias("GROK_PROXY_ALLOW_PUBLIC_BIND", "allow_public_bind"),
+    )
+    chat_stream_via_orchestrator: bool = Field(
+        default=True,
+        validation_alias=_alias(
+            "GROK_PROXY_CHAT_STREAM_VIA_ORCHESTRATOR",
+            "chat_stream_via_orchestrator",
+        ),
+    )
+
+    def validate_bind_safety(self) -> None:
+        """Refuse public bind unless explicitly allowed."""
+        public_hosts = {"0.0.0.0", "::", "[::]"}
+        if self.host in public_hosts and not self.allow_public_bind:
+            raise RuntimeError(
+                f"Refusing to bind host={self.host!r} (public interface). "
+                "Use 127.0.0.1, or set GROK_PROXY_ALLOW_PUBLIC_BIND=1 with extreme caution."
+            )
+
+    def effective_always_approve(self, *, backend_name: str | None = None) -> bool:
+        """Headless cannot wait for interactive approval; force approve there."""
+        name = (backend_name or self.backend or "headless").lower()
+        if name == "headless":
+            return True
+        return bool(self.always_approve)
 
     @field_validator("cwd_allowlist", mode="before")
     @classmethod

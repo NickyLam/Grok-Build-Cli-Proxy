@@ -1,4 +1,10 @@
-<!-- 状态：v0.2 基础实现已落地（2026-07-31）。Sprint 1–2 与 MVP 核心路径完成；ACP 为可切换骨架，真实 grok agent E2E 与 Scoped API Key 管理 API 待后续。 -->
+<!--
+状态：v0.2 代码对账（2026-07-31）
+- last reconciled: 2026-07-31
+- 本轮按 `src/grok_proxy/` 与 tests/docs 实际实现核对；此前部分批量勾选可能偏乐观，本清单以代码为准。
+- v0.2 基础路径已落地：Backend/Headless/SQLite/状态机/Responses+SSE/cancel/ACP 基础/权限 broker+API/workspace/scoped keys/MCP tools 基础/metrics/request_id/per-key 并发等。
+- 未完成：pre-commit、客户端 E2E（Codex/WorkBuddy 等）、完整 ACP 工具/权限 E2E、agent serve、DELETE/list responses、正式重启恢复（pid reclaim 已有基础）、客户端/ACP 全量 E2E、标准 MCP SDK、Docker 等。
+-->
 
 # Grok Build CLI Proxy：方案 B 实施任务清单
 
@@ -185,9 +191,9 @@
 - [x] `P0` 实现错误转换
 - [x] `P0` 实现超时
 - [x] `P0` 实现清理逻辑
-- [ ] `P1` 实现 Background Task
-- [ ] `P1` 实现任务并发控制
-- [ ] `P1` 实现 per-key 并发限制
+- [x] `P1` 实现 Background Task
+- [x] `P1` 实现任务并发控制
+- [x] `P1` 实现 per-key 并发限制
 
 验收：
 
@@ -224,7 +230,7 @@
 - [x] `P0` 定义 `ResponseUsage`
 - [x] `P0` 定义 `ResponseError`
 - [x] `P0` 定义 `GrokExtensions`
-- [ ] `P0` 定义输入 Text 和 Message
+- [x] `P0` 定义输入 Text 和 Message
 - [ ] `P1` 定义工具输出对象
 - [ ] `P1` 定义 Reasoning Summary
 
@@ -289,8 +295,8 @@
 - [x] `P0` 实现 Session Update 监听
 - [x] `P0` 实现 Session Cancel
 - [x] `P0` 实现 Session Close
-- [ ] `P0` 实现协议错误处理
-- [ ] `P0` 实现 stdout/stderr 分离
+- [x] `P0` 实现协议错误处理
+- [x] `P0` 实现 stdout/stderr 分离
 - [ ] `P1` 实现进程重启
 - [ ] `P1` 实现 ACP 能力探测
 
@@ -313,16 +319,16 @@
 
 - [x] `P0` 实现 `AcpBackend.start_session`
 - [x] `P0` 实现 `send_prompt`
-- [ ] `P0` 实现 `events`
+- [x] `P0` 实现 `events`
 - [x] `P0` 实现 `resolve_permission`
 - [x] `P0` 实现 `cancel`
-- [ ] `P0` 实现 `close`
+- [x] `P0` 实现 `close`
 - [ ] `P0` 支持 Session Resume
-- [ ] `P0` 绑定 cwd
+- [x] `P0` 绑定 cwd
 - [ ] `P0` 绑定 model
-- [ ] `P0` 绑定 permission mode
+- [x] `P0` 绑定 permission mode
 - [ ] `P1` 支持 `grok agent serve`
-- [ ] `P1` 支持 backend failover
+- [x] `P1` 支持 backend failover
 
 验收：
 
@@ -341,8 +347,8 @@
 - [x] `P0` 定义 Permission Category
 - [x] `P0` 定义 Risk Level
 - [x] `P0` 定义 Decision
-- [ ] `P0` 定义 Scope
-- [ ] `P0` 定义 Expiration
+- [x] `P0` 定义 Scope
+- [x] `P0` 定义 Expiration
 - [x] `P0` 定义 Decision Actor
 
 ## 9.2 Policy Engine
@@ -352,8 +358,8 @@
 - [x] `P0` 定义询问规则
 - [x] `P0` 实现路径匹配
 - [x] `P0` 实现 Shell 命令匹配
-- [ ] `P0` 实现 MCP Tool 匹配
-- [ ] `P0` 实现网络域名匹配
+- [x] `P0` 实现 MCP Tool 匹配
+- [x] `P0` 实现网络域名匹配
 - [x] `P0` 实现 Deny 优先
 - [ ] `P0` 实现客户端只能收紧权限
 - [ ] `P1` 支持 YAML 配置
@@ -367,12 +373,12 @@
 - [x] `P0` 自动允许
 - [x] `P0` 自动拒绝
 - [x] `P0` 创建 Pending Permission
-- [ ] `P0` 将 Response 置为等待审批
+- [x] `P0` 将 Response 置为等待审批
 - [x] `P0` 权限过期
 - [x] `P0` 权限决定幂等
-- [ ] `P0` 将决定返回 ACP
+- [x] `P0` 将决定返回 ACP
 - [x] `P0` 审批后恢复 Response
-- [ ] `P0` 拒绝后向 Grok 传递反馈
+- [x] `P0` 拒绝后向 Grok 传递反馈
 - [ ] `P1` 支持会话范围授权
 - [ ] `P1` 支持命令前缀授权
 - [ ] `P1` 支持 MCP Server 范围授权
@@ -382,15 +388,15 @@
 
 - [x] `P0` 实现 `GET /v1/permissions/{id}`
 - [x] `P0` 实现 `POST /v1/permissions/{id}/decision`
-- [ ] `P0` 校验审批 Scope
-- [ ] `P0` 校验审批者权限
+- [x] `P0` 校验审批 Scope
+- [x] `P0` 校验审批者权限
 - [x] `P0` 实现 `allow_once`
 - [x] `P0` 实现 `allow_for_session`
 - [x] `P0` 实现 `deny_once`
 - [x] `P0` 实现 `deny_with_feedback`
 - [x] `P0` 实现 `cancel_run`
-- [ ] `P1` 实现 Pending Permission 列表
-- [ ] `P1` 实现批量拒绝
+- [x] `P1` 实现 Pending Permission 列表
+- [x] `P1` 实现批量拒绝
 
 验收：
 
@@ -411,16 +417,16 @@
 - [x] `P0` 防止符号链接逃逸
 - [x] `P0` 实现 Workspace Allowlist
 - [x] `P0` 实现 `read_only`
-- [ ] `P0` 实现 `in_place`
+- [x] `P0` 实现 `in_place`
 - [x] `P0` 默认禁止 `in_place`
-- [ ] `P1` 实现 `temporary_copy`
+- [x] `P1` 实现 `temporary_copy`
 
 ## 10.2 Git Worktree
 
 - [x] `P0` 检测 Git 仓库
 - [x] `P0` 创建 Worktree
-- [ ] `P0` 创建任务分支
-- [ ] `P0` 记录 source/run cwd
+- [x] `P0` 创建任务分支
+- [x] `P0` 记录 source/run cwd
 - [x] `P0` 收集 changed files
 - [x] `P0` 生成 diff
 - [x] `P0` 清理 Worktree
@@ -452,35 +458,35 @@
 
 ## 11.1 Key 管理
 
-- [ ] `P0` Key 只存 Hash
-- [ ] `P0` 支持 `gp_live_` 和 `gp_test_`
-- [ ] `P0` 支持 Key 名称
-- [ ] `P0` 支持启停
-- [ ] `P0` 支持撤销
-- [ ] `P0` 支持最后使用时间
+- [x] `P0` Key 只存 Hash
+- [x] `P0` 支持 `gp_live_` 和 `gp_test_`
+- [x] `P0` 支持 Key 名称
+- [x] `P0` 支持启停
+- [x] `P0` 支持撤销
+- [x] `P0` 支持最后使用时间
 - [ ] `P1` 支持 Key 轮换
 - [ ] `P1` 支持过期时间
 
 ## 11.2 Scopes
 
-- [ ] `P0` 实现 `response:create`
-- [ ] `P0` 实现 `response:read`
-- [ ] `P0` 实现 `response:cancel`
-- [ ] `P0` 实现 `event:read`
-- [ ] `P0` 实现 `permission:read`
-- [ ] `P0` 实现 `permission:approve`
-- [ ] `P0` 实现 `workspace:read`
-- [ ] `P0` 实现 `workspace:write`
-- [ ] `P0` 实现 `tool:execute`
-- [ ] `P1` 实现管理 Scope
+- [x] `P0` 实现 `response:create`
+- [x] `P0` 实现 `response:read`
+- [x] `P0` 实现 `response:cancel`
+- [x] `P0` 实现 `event:read`
+- [x] `P0` 实现 `permission:read`
+- [x] `P0` 实现 `permission:approve`
+- [x] `P0` 实现 `workspace:read`
+- [x] `P0` 实现 `workspace:write`
+- [x] `P0` 实现 `tool:execute`
+- [x] `P1` 实现管理 Scope
 
 ## 11.3 限制
 
-- [ ] `P0` per-key workspace allowlist
-- [ ] `P0` per-key max concurrent
-- [ ] `P0` per-key max runtime
-- [ ] `P0` per-key workspace mode
-- [ ] `P0` per-key tool capability
+- [x] `P0` per-key workspace allowlist
+- [x] `P0` per-key max concurrent
+- [x] `P0` per-key max runtime
+- [x] `P0` per-key workspace mode
+- [x] `P0` per-key tool capability
 - [ ] `P1` per-key rate limit
 
 验收：
@@ -496,11 +502,11 @@
 ## 12.1 基础
 
 - [ ] `P0` 选择 MCP SDK
-- [ ] `P0` 实现 MCP stdio
+- [x] `P0` 实现 MCP stdio
 - [ ] `P1` 实现 Streamable HTTP
 - [ ] `P0` MCP 与 HTTP 共用认证上下文
-- [ ] `P0` MCP 与 HTTP 共用 Orchestrator
-- [ ] `P0` MCP 错误映射
+- [x] `P0` MCP 与 HTTP 共用 Orchestrator
+- [x] `P0` MCP 错误映射
 
 ## 12.2 Tools
 
@@ -517,10 +523,10 @@
 ## 12.3 默认策略
 
 - [x] `P0` `grok_consult` 强制只读
-- [ ] `P0` `grok_review` 默认只读
+- [x] `P0` `grok_review` 默认只读
 - [x] `P0` `grok_delegate` 默认 Worktree
 - [ ] `P0` MCP 调用方默认无审批权
-- [ ] `P0` 长任务返回 Response ID
+- [x] `P0` 长任务返回 Response ID
 - [ ] `P1` 支持同步等待上限
 
 ## 12.4 客户端验证
@@ -545,7 +551,7 @@
 
 ## 13.1 Reasoning
 
-- [ ] `P0` 默认不输出原始 thought
+- [x] `P0` 默认不输出原始 thought
 - [ ] `P0` 增加 Reasoning Summary
 - [ ] `P0` 删除 `include_thoughts` 公共能力或标记废弃
 - [ ] `P1` 增加 Debug Raw Event 开关
@@ -554,12 +560,12 @@
 
 ## 13.2 Usage
 
-- [ ] `P0` 映射 input tokens
-- [ ] `P0` 映射 output tokens
-- [ ] `P0` 映射 cached tokens
+- [x] `P0` 映射 input tokens
+- [x] `P0` 映射 output tokens
+- [x] `P0` 映射 cached tokens
 - [ ] `P0` 映射 cache creation tokens
-- [ ] `P0` 映射 reasoning tokens
-- [ ] `P0` 映射 num_turns
+- [x] `P0` 映射 reasoning tokens
+- [x] `P0` 映射 num_turns
 - [ ] `P0` 映射 model usage
 - [ ] `P0` 映射 cost
 - [x] `P0` 处理 incomplete usage
@@ -567,10 +573,10 @@
 
 ## 13.3 输出治理
 
-- [ ] `P0` stdout/stderr 大小限制
+- [x] `P0` stdout/stderr 大小限制
 - [ ] `P0` Tool Result 截断标记
-- [ ] `P0` Secret Redaction
-- [ ] `P0` API Key Redaction
+- [x] `P0` Secret Redaction
+- [x] `P0` API Key Redaction
 - [ ] `P0` Cookie Redaction
 - [ ] `P1` 超大输出外置
 - [ ] `P1` Artifact 下载授权
@@ -581,29 +587,29 @@
 
 ## 14.1 日志
 
-- [ ] `P0` 结构化日志
-- [ ] `P0` request_id
-- [ ] `P0` response_id
+- [x] `P0` 结构化日志
+- [x] `P0` request_id
+- [x] `P0` response_id
 - [ ] `P0` session_id
 - [ ] `P0` tool_call_id
 - [ ] `P0` permission_id
-- [ ] `P0` api_key_id
+- [x] `P0` api_key_id
 - [ ] `P0` backend
-- [ ] `P0` duration
+- [x] `P0` duration
 - [ ] `P0` 日志脱敏
 
 ## 14.2 Metrics
 
-- [ ] `P1` `responses_total`
-- [ ] `P1` `responses_active`
-- [ ] `P1` `responses_duration_seconds`
+- [x] `P1` `responses_total`
+- [x] `P1` `responses_active`
+- [x] `P1` `responses_duration_seconds`
 - [ ] `P1` `permissions_pending`
 - [ ] `P1` `permissions_decision_seconds`
 - [ ] `P1` `tool_calls_total`
 - [ ] `P1` `tool_calls_failed`
 - [ ] `P1` `backend_restarts_total`
 - [ ] `P1` `workspace_locks_active`
-- [ ] `P1` `sse_connections_active`
+- [x] `P1` `sse_connections_active`
 
 ## 14.3 Health
 
@@ -623,12 +629,12 @@
 
 - [x] `P0` 状态机测试
 - [x] `P0` Policy Matcher 测试
-- [ ] `P0` Scope 测试
+- [x] `P0` Scope 测试
 - [x] `P0` Workspace 路径测试
 - [x] `P0` 符号链接逃逸测试
 - [ ] `P0` Worktree 测试
-- [ ] `P0` Tool Mapper 测试
-- [ ] `P0` ACP Event Mapper 测试
+- [x] `P0` Tool Mapper 测试
+- [x] `P0` ACP Event Mapper 测试
 - [x] `P0` Permission Broker 测试
 - [ ] `P0` Usage Mapper 测试
 - [ ] `P0` Error Mapper 测试
@@ -686,18 +692,18 @@
 - [ ] `P0` Codex 配置
 - [ ] `P0` Qoder 配置
 - [ ] `P0` CodeBuddy 配置
-- [ ] `P0` 安全说明
+- [x] `P0` 安全说明
 - [ ] `P0` 权限策略说明
 - [ ] `P0` Worktree 说明
 - [ ] `P1` 故障排查
-- [ ] `P1` 架构图
+- [x] `P1` 架构图
 - [ ] `P1` API 示例集合
 
 ## 16.2 发布
 
-- [ ] `P0` v0.2 Release Notes
+- [x] `P0` v0.2 Release Notes
 - [ ] `P0` v0.3 Release Notes
-- [ ] `P0` 升级指南
+- [x] `P0` 升级指南
 - [ ] `P0` 数据库迁移说明
 - [ ] `P0` 配置迁移说明
 - [ ] `P1` Dockerfile
@@ -796,23 +802,23 @@
 
 # 18. MVP 范围
 
-首个可发布 MVP 建议只包含：
+首个可发布 MVP 建议只包含（对账：以下为 v0.2 代码已具备的 MVP 项）：
 
-- [ ] Backend 抽象
-- [ ] HeadlessBackend
-- [ ] SQLite
-- [ ] Response 状态机
-- [ ] `/v1/responses`
-- [ ] SSE 和事件重连
-- [ ] Tool Call 可见
+- [x] Backend 抽象
+- [x] HeadlessBackend
+- [x] SQLite
+- [x] Response 状态机
+- [x] `/v1/responses`
+- [x] SSE 和事件重连
+- [x] Tool Call 可见
 - [x] Cancel
-- [ ] ACP stdio
-- [ ] Permission Broker
-- [ ] Approval API
+- [x] ACP stdio
+- [x] Permission Broker
+- [x] Approval API
 - [x] `read_only` 和 `worktree`
-- [ ] `grok_consult`
-- [ ] `grok_review`
-- [ ] `grok_delegate`
+- [x] `grok_consult`
+- [x] `grok_review`
+- [x] `grok_delegate`
 
 MVP 暂不包含：
 
@@ -829,20 +835,23 @@ MVP 暂不包含：
 
 # 19. 发布阻断条件
 
-以下任一问题存在时，不应发布正式版：
+以下任一问题**仍成立**时，不应发布「正式版 / 生产硬安全门」；标记约定：
 
-- [ ] 权限请求可能被调用方绕过
-- [x] API Key 可突破 Workspace Allowlist
-- [ ] 取消后存在残留进程
-- [ ] 两个写任务可修改同一原工作区
-- [x] Permission Decision 非幂等
-- [x] SSE 重连会丢事件
-- [ ] 原始 Thought 通过公共 API 暴露
-- [ ] Prompt 暴露在进程列表
-- [ ] Key 明文存储
-- [ ] 服务默认监听公网
-- [ ] 服务默认 `always_approve`
-- [ ] 真实 Grok ACP E2E 未通过
+- `[x]` = 该阻断项已在代码中消除或充分缓解
+- `[ ]` = 该问题仍可能成立，构成发布风险
+
+- [ ] 权限请求可能被调用方绕过（默认 always_approve=False；Headless 仍强制；scoped key 有部分约束）
+- [x] API Key 可突破 Workspace Allowlist（已强制 key/server allowlist 校验）
+- [ ] 取消后存在残留进程（进程组终止已实现；正式孤儿扫描 / 启动恢复未完成）
+- [x] 两个写任务可修改同一原工作区（in_place 排他写锁；默认禁止 in_place）
+- [x] Permission Decision 非幂等（同决策幂等；冲突返回 409）
+- [x] SSE 重连会丢事件（event journal + `Last-Event-ID` / `after_sequence`）
+- [x] 原始 Thought 通过公共 API 暴露（默认 `include_thoughts=False`）
+- [x] Prompt 暴露在进程列表（Headless 使用 `--prompt-file` + `0600`）
+- [x] Key 明文存储（仅存 hash + pepper）
+- [x] 服务默认监听公网（默认 `127.0.0.1`）
+- [x] 服务默认 `always_approve`（默认 `False`；Headless 强制 approve 以保证 `grok -p` 可运行）
+- [ ] 真实 Grok ACP E2E 未通过（有 opt-in 用例，未作为 CI 硬门）
 - [ ] Codex/Qoder/CodeBuddy MCP 验证未完成
 
 ---
