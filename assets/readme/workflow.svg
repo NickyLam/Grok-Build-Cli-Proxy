@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="160" viewBox="0 0 1200 160" role="img" aria-labelledby="title desc">
+  <title id="title">Quick start workflow</title>
+  <desc id="desc">Three steps: sync dependencies, start the gateway, send the first request.</desc>
+  <rect width="1200" height="160" rx="20" fill="#0A0E13"/>
+  <rect x="1" y="1" width="1198" height="158" rx="19" fill="none" stroke="#243041"/>
+
+  <!-- step 1 -->
+  <g transform="translate(32 28)">
+    <circle cx="22" cy="22" r="22" fill="#152238" stroke="#5B9FFF"/>
+    <text x="22" y="29" text-anchor="middle" fill="#5B9FFF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700">1</text>
+    <text x="58" y="18" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" letter-spacing="1.5">INSTALL</text>
+    <text x="58" y="48" fill="#E8EEF5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18">uv sync --all-extras</text>
+  </g>
+
+  <path d="M360 80 H400" stroke="#33455C" stroke-width="2" stroke-dasharray="4 4"/>
+  <polygon points="408,80 398,74 398,86" fill="#5B9FFF"/>
+
+  <!-- step 2 -->
+  <g transform="translate(420 28)">
+    <circle cx="22" cy="22" r="22" fill="#152238" stroke="#5B9FFF"/>
+    <text x="22" y="29" text-anchor="middle" fill="#5B9FFF" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700">2</text>
+    <text x="58" y="18" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" letter-spacing="1.5">START</text>
+    <text x="58" y="48" fill="#E8EEF5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18">uv run grok-proxy</text>
+  </g>
+
+  <path d="M760 80 H800" stroke="#33455C" stroke-width="2" stroke-dasharray="4 4"/>
+  <polygon points="808,80 798,74 798,86" fill="#3DDC97"/>
+
+  <!-- step 3 -->
+  <g transform="translate(820 28)">
+    <circle cx="22" cy="22" r="22" fill="#14261F" stroke="#3DDC97"/>
+    <text x="22" y="29" text-anchor="middle" fill="#3DDC97" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700">3</text>
+    <text x="58" y="18" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" letter-spacing="1.5">CALL</text>
+    <text x="58" y="48" fill="#E8EEF5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18">POST /v1/responses</text>
+  </g>
+
+  <text x="600" y="140" text-anchor="middle" fill="#6B7C90" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="16">Python 3.11+ · Grok Build CLI on PATH · key auto-generated under ~/.grok-proxy/</text>
+</svg>

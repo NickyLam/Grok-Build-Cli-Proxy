@@ -1,80 +1,82 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
-  <title id="title">Grok Build CLI Proxy — local Agent Gateway</title>
-  <desc id="desc">OpenAI-compatible gateway that exposes Grok Build as Chat Completions, Responses API, and MCP tools with permissions and workspace isolation.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-labelledby="title desc">
+  <title id="title">Grok Build CLI Proxy — Local Agent Gateway</title>
+  <desc id="desc">Turn Grok Build CLI into an OpenAI-compatible local gateway: Chat Completions, Responses API, and MCP tools with permissions and workspace isolation.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0B0F14"/>
-      <stop offset="100%" stop-color="#121A24"/>
+      <stop offset="0%" stop-color="#0A0E13"/>
+      <stop offset="100%" stop-color="#111922"/>
     </linearGradient>
-    <linearGradient id="rail" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#5B9FFF" stop-opacity="0.15"/>
-      <stop offset="50%" stop-color="#5B9FFF" stop-opacity="0.55"/>
-      <stop offset="100%" stop-color="#3DDC97" stop-opacity="0.35"/>
+    <linearGradient id="flow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#5B9FFF" stop-opacity="0.2"/>
+      <stop offset="50%" stop-color="#5B9FFF" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#3DDC97" stop-opacity="0.55"/>
     </linearGradient>
-    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
-      <circle cx="1.5" cy="1.5" r="1" fill="#E8EEF5" fill-opacity="0.06"/>
-    </pattern>
   </defs>
 
-  <rect width="1200" height="360" rx="26" fill="url(#bg)"/>
-  <rect width="1200" height="360" rx="26" fill="url(#dots)"/>
-  <rect x="1" y="1" width="1198" height="358" rx="25" fill="none" stroke="#243041" stroke-width="1"/>
+  <rect width="1200" height="380" rx="26" fill="url(#bg)"/>
+  <rect x="1" y="1" width="1198" height="378" rx="25" fill="none" stroke="#243041"/>
 
-  <!-- left accent bar -->
-  <rect x="0" y="72" width="6" height="216" rx="3" fill="#5B9FFF"/>
+  <!-- left accent rail -->
+  <rect x="0" y="64" width="5" height="252" rx="2.5" fill="#5B9FFF"/>
 
   <!-- title block -->
-  <g transform="translate(56 52)">
-    <text x="0" y="22" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" letter-spacing="2">LOCAL AGENT GATEWAY · v0.2</text>
-    <text x="0" y="78" fill="#E8EEF5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif" font-size="48" font-weight="700">Grok Build CLI Proxy</text>
-    <text x="0" y="122" fill="#C5D0DE" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif" font-size="22">Turn Grok Build into OpenAI-compatible</text>
-    <text x="0" y="152" fill="#C5D0DE" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif" font-size="22">Chat · Responses · MCP APIs — with</text>
-    <text x="0" y="182" fill="#C5D0DE" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif" font-size="22">permissions, workspaces, and cancel/SSE.</text>
+  <g transform="translate(48 48)">
+    <text x="0" y="22" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" letter-spacing="2.5">LOCAL AGENT GATEWAY · v0.2 · MIT</text>
+    <text x="0" y="78" fill="#E8EEF5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif" font-size="46" font-weight="700">Grok Build CLI Proxy</text>
+    <text x="0" y="120" fill="#C5D0DE" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif" font-size="21">One local process. OpenAI HTTP + MCP in,</text>
+    <text x="0" y="150" fill="#C5D0DE" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif" font-size="21">Grok Build agent out — with cancel, SSE,</text>
+    <text x="0" y="180" fill="#C5D0DE" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, PingFang SC, sans-serif" font-size="21">permissions, and workspace isolation.</text>
 
-    <g transform="translate(0 220)">
-      <rect x="0" y="0" width="112" height="34" rx="10" fill="#172232" stroke="#33455C"/>
-      <text x="56" y="22" text-anchor="middle" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">Python 3.11+</text>
-      <rect x="124" y="0" width="100" height="34" rx="10" fill="#172232" stroke="#33455C"/>
-      <text x="174" y="22" text-anchor="middle" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">MIT</text>
-      <rect x="236" y="0" width="150" height="34" rx="10" fill="#14261F" stroke="#2F6B52"/>
-      <text x="311" y="22" text-anchor="middle" fill="#3DDC97" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">127.0.0.1 only</text>
+    <g transform="translate(0 220)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">
+      <rect x="0" y="0" width="168" height="36" rx="10" fill="#152238" stroke="#3A5470"/>
+      <text x="84" y="23" text-anchor="middle" fill="#A8B8CC">Chat Completions</text>
+      <rect x="178" y="0" width="128" height="36" rx="10" fill="#152238" stroke="#3A5470"/>
+      <text x="242" y="23" text-anchor="middle" fill="#A8B8CC">Responses</text>
+      <rect x="316" y="0" width="88" height="36" rx="10" fill="#14261F" stroke="#2F6B52"/>
+      <text x="360" y="23" text-anchor="middle" fill="#3DDC97">MCP</text>
+      <rect x="414" y="0" width="148" height="36" rx="10" fill="#152238" stroke="#3A5470"/>
+      <text x="488" y="23" text-anchor="middle" fill="#A8B8CC">127.0.0.1 only</text>
     </g>
   </g>
 
-  <!-- right: mini architecture proof -->
-  <g transform="translate(700 48)">
-    <rect x="0" y="0" width="448" height="264" rx="18" fill="#0E1520" stroke="#2A3A4F"/>
-    <text x="24" y="34" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">REQUEST PATH</text>
+  <!-- right: terminal proof of the gateway path -->
+  <g transform="translate(680 40)">
+    <rect x="0" y="0" width="472" height="300" rx="18" fill="#0C121A" stroke="#2A3A4F"/>
+    <!-- title bar -->
+    <rect x="0" y="0" width="472" height="40" rx="18" fill="#121A24"/>
+    <rect x="0" y="22" width="472" height="18" fill="#121A24"/>
+    <circle cx="28" cy="20" r="5" fill="#FF5F57"/>
+    <circle cx="48" cy="20" r="5" fill="#FEBC2E"/>
+    <circle cx="68" cy="20" r="5" fill="#28C840"/>
+    <text x="236" y="25" text-anchor="middle" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">gateway · :8787</text>
 
-    <!-- clients -->
-    <rect x="24" y="56" width="118" height="52" rx="12" fill="#172232" stroke="#5B9FFF"/>
-    <text x="83" y="78" text-anchor="middle" fill="#E8EEF5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="16" font-weight="600">Clients</text>
-    <text x="83" y="98" text-anchor="middle" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">HTTP · MCP</text>
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+      <text x="24" y="72" fill="#5B9FFF" font-size="16">$</text>
+      <text x="44" y="72" fill="#E8EEF5" font-size="16">uv run grok-proxy</text>
 
-    <path d="M150 82 H188" stroke="url(#rail)" stroke-width="3" fill="none"/>
-    <circle cx="188" cy="82" r="4" fill="#5B9FFF"/>
+      <text x="24" y="108" fill="#8B9BB0" font-size="15">Base URL  http://127.0.0.1:8787/v1</text>
+      <text x="24" y="134" fill="#8B9BB0" font-size="15">API Key   sk-gp-••••  (auto)</text>
+      <text x="24" y="160" fill="#8B9BB0" font-size="15">Model     grok-4.5</text>
 
-    <!-- gateway -->
-    <rect x="196" y="50" width="140" height="64" rx="12" fill="#152238" stroke="#5B9FFF" stroke-width="1.5"/>
-    <text x="266" y="76" text-anchor="middle" fill="#E8EEF5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="16" font-weight="600">Orchestrator</text>
-    <text x="266" y="98" text-anchor="middle" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12">state · journal</text>
+      <path d="M24 180 H448" stroke="#243041" stroke-width="1"/>
 
-    <path d="M266 122 V148" stroke="#5B9FFF" stroke-width="2" fill="none" opacity="0.7"/>
-    <path d="M220 148 H312" stroke="#5B9FFF" stroke-width="2" fill="none" opacity="0.7"/>
-    <path d="M220 148 V164" stroke="#5B9FFF" stroke-width="2" fill="none" opacity="0.5"/>
-    <path d="M312 148 V164" stroke="#3DDC97" stroke-width="2" fill="none" opacity="0.7"/>
+      <text x="24" y="210" fill="#8B9BB0" font-size="14">REQUEST PATH</text>
 
-    <!-- backends -->
-    <rect x="150" y="164" width="120" height="48" rx="10" fill="#172232" stroke="#4A627F"/>
-    <text x="210" y="185" text-anchor="middle" fill="#E8EEF5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="14" font-weight="600">Headless</text>
-    <text x="210" y="203" text-anchor="middle" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">grok -p file</text>
+      <!-- path chips -->
+      <rect x="24" y="228" width="96" height="40" rx="10" fill="#152238" stroke="#5B9FFF"/>
+      <text x="72" y="253" text-anchor="middle" fill="#E8EEF5" font-size="15" font-weight="600">Client</text>
 
-    <rect x="286" y="164" width="120" height="48" rx="10" fill="#14261F" stroke="#3DDC97"/>
-    <text x="346" y="185" text-anchor="middle" fill="#E8EEF5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="14" font-weight="600">ACP</text>
-    <text x="346" y="203" text-anchor="middle" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">agent stdio</text>
+      <path d="M128 248 H148" stroke="url(#flow)" stroke-width="3"/>
+      <polygon points="148,248 140,243 140,253" fill="#5B9FFF"/>
 
-    <path d="M266 220 V236" stroke="#8B9BB0" stroke-width="2" fill="none" opacity="0.5"/>
-    <rect x="186" y="236" width="160" height="40" rx="10" fill="#1A2433" stroke="#3DDC97"/>
-    <text x="266" y="261" text-anchor="middle" fill="#3DDC97" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">Grok Build CLI</text>
+      <rect x="152" y="228" width="120" height="40" rx="10" fill="#152238" stroke="#5B9FFF"/>
+      <text x="212" y="253" text-anchor="middle" fill="#E8EEF5" font-size="15" font-weight="600">Orchestrator</text>
+
+      <path d="M280 248 H300" stroke="url(#flow)" stroke-width="3"/>
+      <polygon points="300,248 292,243 292,253" fill="#3DDC97"/>
+
+      <rect x="304" y="228" width="140" height="40" rx="10" fill="#14261F" stroke="#3DDC97"/>
+      <text x="374" y="253" text-anchor="middle" fill="#3DDC97" font-size="15" font-weight="600">Grok Build</text>
+    </g>
   </g>
 </svg>

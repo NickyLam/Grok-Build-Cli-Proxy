@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="200" viewBox="0 0 1200 200" role="img" aria-labelledby="title desc">
+  <title id="title">Three integration surfaces</title>
+  <desc id="desc">Chat Completions for OpenAI SDK and WorkBuddy, Responses API for long-running agent tasks, and MCP stdio for tool-using agents.</desc>
+  <rect width="1200" height="200" rx="20" fill="#0A0E13"/>
+  <rect x="1" y="1" width="1198" height="198" rx="19" fill="none" stroke="#243041"/>
+
+  <!-- card 1 -->
+  <g transform="translate(28 28)">
+    <rect width="360" height="144" rx="16" fill="#0F1620" stroke="#2A3A4F"/>
+    <rect x="0" y="0" width="6" height="144" rx="3" fill="#5B9FFF"/>
+    <text x="28" y="40" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" letter-spacing="1.5">COMPAT</text>
+    <text x="28" y="76" fill="#E8EEF5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="24" font-weight="700">Chat Completions</text>
+    <text x="28" y="110" fill="#A8B8CC" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="16">OpenAI SDK · WorkBuddy · OpenCode</text>
+    <text x="28" y="134" fill="#6B7C90" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">POST /v1/chat/completions</text>
+  </g>
+
+  <!-- card 2 -->
+  <g transform="translate(420 28)">
+    <rect width="360" height="144" rx="16" fill="#0F1620" stroke="#2A3A4F"/>
+    <rect x="0" y="0" width="6" height="144" rx="3" fill="#5B9FFF"/>
+    <text x="28" y="40" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" letter-spacing="1.5">STATEFUL</text>
+    <text x="28" y="76" fill="#E8EEF5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="24" font-weight="700">Responses API</text>
+    <text x="28" y="110" fill="#A8B8CC" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="16">Poll · cancel · SSE replay</text>
+    <text x="28" y="134" fill="#6B7C90" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">POST /v1/responses</text>
+  </g>
+
+  <!-- card 3 -->
+  <g transform="translate(812 28)">
+    <rect width="360" height="144" rx="16" fill="#0F1A16" stroke="#2F6B52"/>
+    <rect x="0" y="0" width="6" height="144" rx="3" fill="#3DDC97"/>
+    <text x="28" y="40" fill="#8B9BB0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" letter-spacing="1.5">TOOLS</text>
+    <text x="28" y="76" fill="#E8EEF5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="24" font-weight="700">MCP stdio</text>
+    <text x="28" y="110" fill="#A8B8CC" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="16">Codex · Qoder · CodeBuddy</text>
+    <text x="28" y="134" fill="#3DDC97" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">grok-proxy --mcp-stdio</text>
+  </g>
+</svg>
