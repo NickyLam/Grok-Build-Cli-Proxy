@@ -3,6 +3,10 @@
 </p>
 
 <p align="center">
+  <strong>English</strong> · <a href="./README.zh-CN.md">中文</a>
+</p>
+
+<p align="center">
   <strong>Local Agent Gateway</strong> for <a href="https://x.ai">Grok Build CLI</a><br/>
   OpenAI Chat Completions · Responses API · permissions · workspaces · MCP
 </p>
