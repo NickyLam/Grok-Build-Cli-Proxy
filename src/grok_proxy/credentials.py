@@ -290,8 +290,67 @@ def write_client_config_files(
     return written
 
 
+# Client config provider ids (stable keys we own inside third-party configs)
+OPENCODE_PROVIDER_ID = "grok-proxy"
+PI_AGENT_PROVIDER_ID = "grok-proxy"
+
+
 def workbuddy_models_path() -> Path:
     return Path.home() / ".workbuddy" / "models.json"
+
+
+def opencode_config_path() -> Path:
+    """User-level OpenCode config (project opencode.json is not auto-touched)."""
+    return Path.home() / ".config" / "opencode" / "opencode.json"
+
+
+def pi_agent_models_path() -> Path:
+    return Path.home() / ".pi" / "agent" / "models.json"
+
+
+def _backup_json(path: Path) -> None:
+    if not path.is_file():
+        return
+    bak = path.with_suffix(path.suffix + ".bak") if path.suffix else path.with_name(path.name + ".bak")
+    # Prefer .json.bak for *.json (matches WorkBuddy convention)
+    if path.suffix == ".json":
+        bak = path.with_suffix(".json.bak")
+    try:
+        bak.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    except OSError as exc:
+        logger.warning("could not backup %s: %s", path, exc)
+
+
+def _ensure_parent_dir(path: Path, *, label: str, create: bool) -> bool:
+    """Return True if parent is ready for writing."""
+    if path.parent.is_dir():
+        return True
+    if not create:
+        logger.warning(
+            "%s config dir not found (%s); skip auto-install.",
+            label,
+            path.parent,
+        )
+        return False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return True
+    except OSError as exc:
+        logger.warning("could not create %s dir %s: %s", label, path.parent, exc)
+        return False
+
+
+def _load_json_file(path: Path) -> object | None:
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        logger.warning("Could not parse %s; will rewrite with merge of empty base", path)
+        return None
+    except OSError as exc:
+        logger.warning("Could not read %s: %s", path, exc)
+        return None
 
 
 def install_workbuddy_model(
@@ -305,6 +364,7 @@ def install_workbuddy_model(
     Returns path written, or None if WorkBuddy dir does not exist.
 
     remove_ids: drop stale entries (e.g. old invalid "grok-build" id).
+    Existing unrelated models are always preserved.
     """
     path = models_path or workbuddy_models_path()
     if not path.parent.is_dir():
@@ -317,13 +377,9 @@ def install_workbuddy_model(
         return None
 
     entries: list[dict] = []
-    if path.is_file():
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(raw, list):
-                entries = [e for e in raw if isinstance(e, dict)]
-        except json.JSONDecodeError:
-            logger.warning("Could not parse %s; creating new list", path)
+    raw = _load_json_file(path)
+    if isinstance(raw, list):
+        entries = [e for e in raw if isinstance(e, dict)]
 
     drop = set(remove_ids or [])
     # Also drop prior proxy entries that pointed at our base_url but wrong id
@@ -354,17 +410,192 @@ def install_workbuddy_model(
     if not replaced:
         entries.append(entry)
 
-    # Backup once
-    if path.is_file():
-        bak = path.with_suffix(".json.bak")
-        try:
-            bak.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-        except OSError:
-            pass
-
+    _backup_json(path)
     path.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     _chmod_private(path)
     logger.info("%s WorkBuddy model %r in %s", "Updated" if replaced else "Added", info.model_id, path)
+    return path
+
+
+def install_opencode_model(
+    info: StoredCredentials,
+    *,
+    config_path: Path | None = None,
+    provider_id: str = OPENCODE_PROVIDER_ID,
+    create_dirs: bool = True,
+) -> Path | None:
+    """
+    Upsert provider ``grok-proxy`` + model into OpenCode user config.
+
+    Merges into existing ``opencode.json``: other providers, models, and top-level
+    keys (including ``model`` default selection) are preserved. Only our
+    provider entry and the target model id are inserted/updated.
+    """
+    path = config_path or opencode_config_path()
+    if not _ensure_parent_dir(path, label="OpenCode", create=create_dirs):
+        return None
+
+    caps = get_model_capabilities(info.model_id)
+    fragment = generic_client_config(
+        api_key=info.api_key,
+        base_url=info.base_url,
+        model_id=info.model_id,
+        caps=caps,
+    )["opencode"]
+    model_entry = {
+        "name": fragment["name"],
+        "limit": fragment["limit"],
+        "modalities": fragment["modalities"],
+    }
+
+    data: dict = {}
+    raw = _load_json_file(path)
+    if isinstance(raw, dict):
+        data = dict(raw)
+    elif raw is not None:
+        logger.warning("%s root is not an object; starting from empty object", path)
+
+    providers = data.get("provider")
+    if not isinstance(providers, dict):
+        providers = {}
+    else:
+        providers = dict(providers)
+
+    existing = providers.get(provider_id)
+    if not isinstance(existing, dict):
+        existing = {}
+    else:
+        existing = dict(existing)
+
+    models = existing.get("models")
+    if not isinstance(models, dict):
+        models = {}
+    else:
+        models = dict(models)
+
+    prev = models.get(info.model_id)
+    if isinstance(prev, dict):
+        models[info.model_id] = {**prev, **model_entry}
+        action = "Updated"
+    else:
+        models[info.model_id] = model_entry
+        action = "Added"
+
+    options = existing.get("options")
+    if not isinstance(options, dict):
+        options = {}
+    else:
+        options = dict(options)
+    options["baseURL"] = info.base_url
+    options["apiKey"] = info.api_key
+
+    providers[provider_id] = {
+        **existing,
+        "npm": existing.get("npm") or "@ai-sdk/openai-compatible",
+        "name": existing.get("name") or "Grok Proxy (local)",
+        "options": options,
+        "models": models,
+    }
+    data["provider"] = providers
+    if "$schema" not in data:
+        data["$schema"] = "https://opencode.ai/config.json"
+    # Do not overwrite data["model"] — keep the user's selected default.
+
+    _backup_json(path)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    _chmod_private(path)
+    logger.info(
+        "%s OpenCode model %s/%s in %s",
+        action,
+        provider_id,
+        info.model_id,
+        path,
+    )
+    return path
+
+
+def install_pi_agent_model(
+    info: StoredCredentials,
+    *,
+    models_path: Path | None = None,
+    provider_id: str = PI_AGENT_PROVIDER_ID,
+    create_dirs: bool = True,
+) -> Path | None:
+    """
+    Upsert provider ``grok-proxy`` + model into Pi Agent models.json.
+
+    Merges into existing config: other providers and models are preserved.
+    Only our provider fields and the model with matching ``id`` are upserted.
+    """
+    path = models_path or pi_agent_models_path()
+    if not _ensure_parent_dir(path, label="Pi Agent", create=create_dirs):
+        return None
+
+    caps = get_model_capabilities(info.model_id)
+    model_entry = generic_client_config(
+        api_key=info.api_key,
+        base_url=info.base_url,
+        model_id=info.model_id,
+        caps=caps,
+    )["pi_agent"]
+
+    data: dict = {}
+    raw = _load_json_file(path)
+    if isinstance(raw, dict):
+        data = dict(raw)
+    elif raw is not None:
+        logger.warning("%s root is not an object; starting from empty object", path)
+
+    providers = data.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+    else:
+        providers = dict(providers)
+
+    existing = providers.get(provider_id)
+    if not isinstance(existing, dict):
+        existing = {}
+    else:
+        existing = dict(existing)
+
+    models_raw = existing.get("models")
+    models: list[dict] = []
+    if isinstance(models_raw, list):
+        models = [m for m in models_raw if isinstance(m, dict)]
+
+    replaced = False
+    for i, m in enumerate(models):
+        if m.get("id") == info.model_id:
+            models[i] = {**m, **model_entry}
+            replaced = True
+            break
+    if not replaced:
+        models.append(dict(model_entry))
+
+    compat = existing.get("compat")
+    if not isinstance(compat, dict):
+        compat = {"supportsDeveloperRole": False}
+
+    providers[provider_id] = {
+        **existing,
+        "baseUrl": info.base_url,
+        "api": existing.get("api") or "openai-completions",
+        "apiKey": info.api_key,
+        "compat": compat,
+        "models": models,
+    }
+    data["providers"] = providers
+
+    _backup_json(path)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    _chmod_private(path)
+    logger.info(
+        "%s Pi Agent model %s/%s in %s",
+        "Updated" if replaced else "Added",
+        provider_id,
+        info.model_id,
+        path,
+    )
     return path
 
 
@@ -373,6 +604,8 @@ def format_startup_banner(
     *,
     written: dict[str, Path] | None = None,
     workbuddy_installed: Path | None = None,
+    opencode_installed: Path | None = None,
+    pi_agent_installed: Path | None = None,
     show_full_key: bool = False,
 ) -> str:
     # Never print the plaintext key by default; point to the key file instead
@@ -408,13 +641,35 @@ def format_startup_banner(
         lines.append("  Saved local config:")
         for name, p in written.items():
             lines.append(f"    - {name}: {p}")
+
+    install_tips: list[str] = []
     if workbuddy_installed:
         lines.append("")
         lines.append(f"  Installed into WorkBuddy: {workbuddy_installed}")
         lines.append("  Restart / refresh WorkBuddy models if needed.")
     else:
+        install_tips.append("--install-workbuddy → ~/.workbuddy/models.json")
+
+    if opencode_installed:
         lines.append("")
-        lines.append("  Tip: start with --install-workbuddy to write ~/.workbuddy/models.json")
+        lines.append(f"  Installed into OpenCode: {opencode_installed}")
+        lines.append("  Other OpenCode providers/models were left intact.")
+    else:
+        install_tips.append("--install-opencode → ~/.config/opencode/opencode.json")
+
+    if pi_agent_installed:
+        lines.append("")
+        lines.append(f"  Installed into Pi Agent: {pi_agent_installed}")
+        lines.append("  Other Pi providers/models were left intact.")
+    else:
+        install_tips.append("--install-pi-agent → ~/.pi/agent/models.json")
+
+    if install_tips:
+        lines.append("")
+        lines.append("  Tip: register clients without wiping existing models:")
+        for tip in install_tips:
+            lines.append(f"    {tip}")
+
     lines.extend(
         [
             "",

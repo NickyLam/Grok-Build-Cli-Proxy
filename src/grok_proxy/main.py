@@ -63,6 +63,8 @@ def create_app(
     *,
     bootstrap: bool = True,
     install_workbuddy: bool | None = None,
+    install_opencode: bool | None = None,
+    install_pi_agent: bool | None = None,
     print_banner: bool = False,
     runtime_models: RuntimeModels | None = None,
     backend: Any | None = None,
@@ -76,6 +78,8 @@ def create_app(
             result = bootstrap_settings(
                 cfg,
                 install_workbuddy=install_workbuddy,
+                install_opencode=install_opencode,
+                install_pi_agent=install_pi_agent,
                 print_banner=print_banner,
             )
             cfg = result.settings

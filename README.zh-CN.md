@@ -38,8 +38,12 @@ uv sync --all-extras
 # 首次启动会自动生成 API Key（~/.grok-proxy/）
 uv run grok-proxy
 
-# 可选：注册 WorkBuddy 自定义模型
+# 可选：向客户端配置写入模型（仅 upsert，不会清空原有模型）
 uv run grok-proxy --install-workbuddy
+uv run grok-proxy --install-opencode
+uv run grok-proxy --install-pi-agent
+# 可合并：
+# uv run grok-proxy --install-workbuddy --install-opencode --install-pi-agent
 ```
 
 启动时会打印 **Base URL / API Key / Model ID**，并写入：
@@ -49,6 +53,14 @@ uv run grok-proxy --install-workbuddy
 | `~/.grok-proxy/api_key` | Bearer token |
 | `~/.grok-proxy/client-config.json` | OpenAI 兼容客户端字段 |
 | `~/.grok-proxy/workbuddy-model.json` | WorkBuddy 模型条目 |
+
+安装参数写入位置：
+
+| 参数 | 目标 | 行为 |
+|------|------|------|
+| `--install-workbuddy` | `~/.workbuddy/models.json` | 插入/更新 Custom 模型，保留其它项 |
+| `--install-opencode` | `~/.config/opencode/opencode.json` | 插入/更新 `provider.grok-proxy` 与模型，保留其它 provider/模型 |
+| `--install-pi-agent` | `~/.pi/agent/models.json` | 插入/更新 `providers.grok-proxy` 与模型，保留其它 provider/模型 |
 
 ### 第一次请求
 
@@ -254,8 +266,8 @@ uv run grok-proxy --mcp-stdio
 | [WorkBuddy](#workbuddy) | HTTP 模型 | `~/.workbuddy/models.json`（可自动安装） |
 | [Qoder](#qoder) | MCP stdio | Qoder 设置 → MCP |
 | [Codex](#codex) | MCP stdio **或** HTTP 模型 | `~/.codex/config.toml` |
-| [OpenCode](#opencode) | HTTP 模型 | `opencode.json` |
-| [Pi Agent](#pi-agent) | HTTP 模型 | `~/.pi/agent/models.json` |
+| [OpenCode](#opencode) | HTTP 模型 | `~/.config/opencode/opencode.json`（`--install-opencode`） |
+| [Pi Agent](#pi-agent) | HTTP 模型 | `~/.pi/agent/models.json`（`--install-pi-agent`） |
 | [Trae CN](#trae-cn) | HTTP 模型（+ MCP） | 设置 → 模型 → 添加模型 |
 | CodeBuddy | MCP stdio | 与 Qoder 相同形态 |
 
@@ -336,7 +348,13 @@ wire_api = "chat"
 <details>
 <summary><strong>OpenCode</strong></summary>
 
-项目 `opencode.json`（或 `~/.config/opencode/opencode.json`）：
+```bash
+uv run grok-proxy --install-opencode   # 写入 ~/.config/opencode/opencode.json 并启动网关
+```
+
+向**用户级**配置合并 `provider.grok-proxy` 与当前模型 id：其它 provider、同 provider 下其它模型、以及你已选的默认 `model` 都不会被清空。若文件已存在会先写 `.json.bak` 备份。
+
+也可手动编辑项目 `opencode.json` 或用户配置：
 
 ```json
 {
@@ -362,7 +380,7 @@ wire_api = "chat"
 }
 ```
 
-`limit` / `modalities` 可在代理启动后从 `~/.grok-proxy/client-config.json` 的 `opencode` 字段复制（会跟随 Grok models cache）。
+`limit` / `modalities` 跟随 Grok models cache（也见 `~/.grok-proxy/client-config.json` → `opencode`）。
 
 网关本身已是完整 Agent，OpenCode 侧用轻量 agent/mode（少本地工具或不用）效果更好——让 Grok 负责编辑。
 
@@ -371,7 +389,13 @@ wire_api = "chat"
 <details>
 <summary><strong>Pi Agent</strong></summary>
 
-`~/.pi/agent/models.json`：
+```bash
+uv run grok-proxy --install-pi-agent   # 写入 ~/.pi/agent/models.json 并启动网关
+```
+
+合并 `providers.grok-proxy` 与当前模型 id；其它 provider 与不同 id 的模型会保留。然后 `/model` → `grok-proxy/grok-4.5`。
+
+`~/.pi/agent/models.json` 形态示例：
 
 ```json
 {
@@ -396,7 +420,6 @@ wire_api = "chat"
 }
 ```
 
-把 `~/.grok-proxy/api_key` 的值填入 `apiKey`，然后 `/model` → `grok-proxy/grok-4.5`。
 `supportsDeveloperRole: false` 会让 pi 发送普通 `system` 消息。
 
 </details>

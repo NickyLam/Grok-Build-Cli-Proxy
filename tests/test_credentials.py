@@ -7,10 +7,14 @@ from grok_proxy.bootstrap import bootstrap_settings
 from grok_proxy.config import Settings, clear_settings_cache
 from grok_proxy.credentials import (
     API_KEY_PREFIX,
+    OPENCODE_PROVIDER_ID,
+    PI_AGENT_PROVIDER_ID,
     build_connection_info,
     ensure_api_key,
     format_startup_banner,
     generate_api_key,
+    install_opencode_model,
+    install_pi_agent_model,
     install_workbuddy_model,
     load_persisted_api_key,
     mask_api_key,
@@ -143,6 +147,182 @@ def test_install_workbuddy_upsert(tmp_path: Path):
     assert entry2["apiKey"] == "sk-gp-new"
 
 
+def test_install_opencode_merges_without_wiping(tmp_path: Path):
+    cfg = tmp_path / "opencode.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "$schema": "https://opencode.ai/config.json",
+                "model": "anthropic/claude-sonnet-4",
+                "provider": {
+                    "anthropic": {
+                        "npm": "@ai-sdk/anthropic",
+                        "name": "Anthropic",
+                        "models": {"claude-sonnet-4": {"name": "Claude"}},
+                    },
+                    "grok-proxy": {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "name": "Grok Proxy (local)",
+                        "options": {
+                            "baseURL": "http://old:1/v1",
+                            "apiKey": "old-key",
+                        },
+                        "models": {
+                            "keep-me": {"name": "Keep Me"},
+                            "grok-4.5": {"name": "Stale", "extra": "preserve-me"},
+                        },
+                    },
+                },
+                "customTop": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    info = build_connection_info(
+        api_key="sk-gp-oc",
+        host="127.0.0.1",
+        port=8787,
+        model_id="grok-4.5",
+        source="generated",
+    )
+    path = install_opencode_model(info, config_path=cfg)
+    assert path == cfg
+    data = json.loads(cfg.read_text())
+
+    # Unrelated top-level + providers preserved
+    assert data["model"] == "anthropic/claude-sonnet-4"
+    assert data["customTop"] is True
+    assert "anthropic" in data["provider"]
+    assert data["provider"]["anthropic"]["models"]["claude-sonnet-4"]["name"] == "Claude"
+
+    # Our provider updated; sibling model kept; same model merged
+    gp = data["provider"][OPENCODE_PROVIDER_ID]
+    assert gp["options"]["baseURL"] == "http://127.0.0.1:8787/v1"
+    assert gp["options"]["apiKey"] == "sk-gp-oc"
+    assert gp["models"]["keep-me"]["name"] == "Keep Me"
+    assert gp["models"]["grok-4.5"]["name"].startswith("Grok")
+    assert gp["models"]["grok-4.5"]["extra"] == "preserve-me"
+    assert "limit" in gp["models"]["grok-4.5"]
+    assert "modalities" in gp["models"]["grok-4.5"]
+
+    # Upsert again does not duplicate
+    install_opencode_model(info, config_path=cfg)
+    data2 = json.loads(cfg.read_text())
+    assert set(data2["provider"][OPENCODE_PROVIDER_ID]["models"]) == {"keep-me", "grok-4.5"}
+
+
+def test_install_opencode_creates_file_when_missing(tmp_path: Path):
+    cfg = tmp_path / "nested" / "opencode.json"
+    info = build_connection_info(
+        api_key="sk-gp-new",
+        host="127.0.0.1",
+        port=8787,
+        model_id="grok-4.5",
+        source="generated",
+    )
+    path = install_opencode_model(info, config_path=cfg, create_dirs=True)
+    assert path == cfg
+    data = json.loads(cfg.read_text())
+    assert OPENCODE_PROVIDER_ID in data["provider"]
+    assert "grok-4.5" in data["provider"][OPENCODE_PROVIDER_ID]["models"]
+    # No forced default model selection
+    assert "model" not in data
+
+
+def test_install_pi_agent_merges_without_wiping(tmp_path: Path):
+    models = tmp_path / "models.json"
+    models.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "openai": {
+                        "baseUrl": "https://api.openai.com/v1",
+                        "api": "openai-completions",
+                        "apiKey": "sk-other",
+                        "models": [{"id": "gpt-4o", "name": "GPT-4o"}],
+                    },
+                    "grok-proxy": {
+                        "baseUrl": "http://old/v1",
+                        "api": "openai-completions",
+                        "apiKey": "old",
+                        "compat": {"supportsDeveloperRole": False, "custom": 1},
+                        "models": [
+                            {"id": "keep-me", "name": "Keep"},
+                            {"id": "grok-4.5", "name": "Stale", "extra": True},
+                        ],
+                    },
+                },
+                "meta": {"note": "keep"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    info = build_connection_info(
+        api_key="sk-gp-pi",
+        host="127.0.0.1",
+        port=8787,
+        model_id="grok-4.5",
+        source="generated",
+    )
+    path = install_pi_agent_model(info, models_path=models)
+    assert path == models
+    data = json.loads(models.read_text())
+
+    assert data["meta"]["note"] == "keep"
+    assert data["providers"]["openai"]["models"][0]["id"] == "gpt-4o"
+
+    gp = data["providers"][PI_AGENT_PROVIDER_ID]
+    assert gp["baseUrl"] == "http://127.0.0.1:8787/v1"
+    assert gp["apiKey"] == "sk-gp-pi"
+    assert gp["compat"]["custom"] == 1
+    ids = [m["id"] for m in gp["models"]]
+    assert ids == ["keep-me", "grok-4.5"]
+    updated = next(m for m in gp["models"] if m["id"] == "grok-4.5")
+    assert updated["extra"] is True
+    assert updated["contextWindow"] >= 128_000
+    assert "image" in updated["input"]
+
+    install_pi_agent_model(info, models_path=models)
+    data2 = json.loads(models.read_text())
+    assert len(data2["providers"][PI_AGENT_PROVIDER_ID]["models"]) == 2
+
+
+def test_install_pi_agent_creates_file_when_missing(tmp_path: Path):
+    models = tmp_path / "agent" / "models.json"
+    info = build_connection_info(
+        api_key="sk-gp-pi2",
+        host="127.0.0.1",
+        port=8787,
+        model_id="grok-4.5",
+        source="generated",
+    )
+    path = install_pi_agent_model(info, models_path=models, create_dirs=True)
+    assert path == models
+    data = json.loads(models.read_text())
+    assert PI_AGENT_PROVIDER_ID in data["providers"]
+    assert data["providers"][PI_AGENT_PROVIDER_ID]["models"][0]["id"] == "grok-4.5"
+
+
+def test_banner_mentions_client_install_tips():
+    key = generate_api_key()
+    info = build_connection_info(
+        api_key=key, host="127.0.0.1", port=8787, model_id="grok-4.5", source="generated"
+    )
+    banner = format_startup_banner(info)
+    assert "--install-opencode" in banner
+    assert "--install-pi-agent" in banner
+    assert "--install-workbuddy" in banner
+
+    banner2 = format_startup_banner(
+        info,
+        opencode_installed=Path("/tmp/opencode.json"),
+        pi_agent_installed=Path("/tmp/models.json"),
+    )
+    assert "Installed into OpenCode" in banner2
+    assert "Installed into Pi Agent" in banner2
+    assert "--install-opencode" not in banner2
+
+
 def test_bootstrap_settings(tmp_path: Path, monkeypatch):
     clear_settings_cache()
     monkeypatch.delenv("GROK_PROXY_API_KEY", raising=False)
@@ -158,6 +338,8 @@ def test_bootstrap_settings(tmp_path: Path, monkeypatch):
     result = bootstrap_settings(
         s,
         install_workbuddy=False,
+        install_opencode=False,
+        install_pi_agent=False,
         state_dir=tmp_path,
         print_banner=False,
     )
@@ -165,6 +347,8 @@ def test_bootstrap_settings(tmp_path: Path, monkeypatch):
     assert load_persisted_api_key(tmp_path) == result.settings.api_key
     assert (tmp_path / "workbuddy-model.json").is_file()
     assert result.settings.default_model == "grok-4.5"
+    assert result.opencode_path is None
+    assert result.pi_agent_path is None
     wb = json.loads((tmp_path / "workbuddy-model.json").read_text())
     assert wb["id"] == "grok-4.5"
     assert wb["supportsImages"] is True

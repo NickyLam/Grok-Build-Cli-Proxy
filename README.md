@@ -38,8 +38,12 @@ uv sync --all-extras
 # API key is auto-generated on first start (~/.grok-proxy/)
 uv run grok-proxy
 
-# Optional: register WorkBuddy custom model
+# Optional: register models into client configs (upsert only — keeps existing models)
 uv run grok-proxy --install-workbuddy
+uv run grok-proxy --install-opencode
+uv run grok-proxy --install-pi-agent
+# Combine flags in one process:
+# uv run grok-proxy --install-workbuddy --install-opencode --install-pi-agent
 ```
 
 Startup prints **Base URL / API Key / Model ID** and writes:
@@ -49,6 +53,14 @@ Startup prints **Base URL / API Key / Model ID** and writes:
 | `~/.grok-proxy/api_key` | Bearer token |
 | `~/.grok-proxy/client-config.json` | OpenAI-compatible client fields |
 | `~/.grok-proxy/workbuddy-model.json` | WorkBuddy model entry |
+
+Install flags merge into:
+
+| Flag | Target | Behavior |
+|------|--------|----------|
+| `--install-workbuddy` | `~/.workbuddy/models.json` | Upsert Custom model; keep others |
+| `--install-opencode` | `~/.config/opencode/opencode.json` | Upsert `provider.grok-proxy` + model; keep other providers/models |
+| `--install-pi-agent` | `~/.pi/agent/models.json` | Upsert `providers.grok-proxy` + model; keep other providers/models |
 
 ### First request
 
@@ -254,8 +266,8 @@ Two integration modes — pick per client:
 | [WorkBuddy](#workbuddy) | HTTP model | `~/.workbuddy/models.json` (auto-install) |
 | [Qoder](#qoder) | MCP stdio | Qoder Settings → MCP |
 | [Codex](#codex) | MCP stdio **or** HTTP model | `~/.codex/config.toml` |
-| [OpenCode](#opencode) | HTTP model | `opencode.json` |
-| [Pi Agent](#pi-agent) | HTTP model | `~/.pi/agent/models.json` |
+| [OpenCode](#opencode) | HTTP model | `~/.config/opencode/opencode.json` (`--install-opencode`) |
+| [Pi Agent](#pi-agent) | HTTP model | `~/.pi/agent/models.json` (`--install-pi-agent`) |
 | [Trae CN](#trae-cn) | HTTP model (+ MCP) | 设置 → 模型 → 添加模型 |
 | CodeBuddy | MCP stdio | same shape as Qoder |
 
@@ -336,7 +348,15 @@ wire_api = "chat"
 <details>
 <summary><strong>OpenCode</strong></summary>
 
-Project `opencode.json` (or `~/.config/opencode/opencode.json`):
+```bash
+uv run grok-proxy --install-opencode   # upsert ~/.config/opencode/opencode.json and start
+```
+
+Merges provider `grok-proxy` + the current model id into the **user** config. Other
+providers, sibling models under `grok-proxy`, and your selected default `model`
+are left untouched. A `.json.bak` backup is written when the file already exists.
+
+Manual equivalent (project `opencode.json` or user config):
 
 ```json
 {
@@ -362,7 +382,8 @@ Project `opencode.json` (or `~/.config/opencode/opencode.json`):
 }
 ```
 
-Copy `limit` / `modalities` from `~/.grok-proxy/client-config.json` → `opencode` after the proxy starts (values track the live Grok models cache).
+`limit` / `modalities` track the live Grok models cache (also in
+`~/.grok-proxy/client-config.json` → `opencode`).
 
 Since the gateway is itself a full agent, a lightweight OpenCode agent/mode (few or no local tools) works best — let Grok do the editing.
 
@@ -371,7 +392,14 @@ Since the gateway is itself a full agent, a lightweight OpenCode agent/mode (few
 <details>
 <summary><strong>Pi Agent</strong></summary>
 
-`~/.pi/agent/models.json`:
+```bash
+uv run grok-proxy --install-pi-agent   # upsert ~/.pi/agent/models.json and start
+```
+
+Merges provider `grok-proxy` + the current model id. Other providers and models
+with different ids are preserved. Then `/model` → `grok-proxy/grok-4.5`.
+
+Manual shape of `~/.pi/agent/models.json`:
 
 ```json
 {
@@ -396,7 +424,6 @@ Since the gateway is itself a full agent, a lightweight OpenCode agent/mode (few
 }
 ```
 
-Put the value of `~/.grok-proxy/api_key` into `apiKey`, then `/model` → `grok-proxy/grok-4.5`.
 `supportsDeveloperRole: false` makes pi send a plain `system` message.
 
 </details>

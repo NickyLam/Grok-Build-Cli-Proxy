@@ -31,12 +31,32 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--install-workbuddy",
         action="store_true",
-        help="Upsert this proxy into ~/.workbuddy/models.json (Custom model)",
+        help="Upsert this proxy into ~/.workbuddy/models.json (Custom model; keeps other models)",
     )
     p.add_argument(
         "--no-install-workbuddy",
         action="store_true",
         help="Do not write WorkBuddy models.json even if env enables it",
+    )
+    p.add_argument(
+        "--install-opencode",
+        action="store_true",
+        help="Upsert provider/model into ~/.config/opencode/opencode.json (keeps other providers)",
+    )
+    p.add_argument(
+        "--no-install-opencode",
+        action="store_true",
+        help="Do not write OpenCode config even if env enables it",
+    )
+    p.add_argument(
+        "--install-pi-agent",
+        action="store_true",
+        help="Upsert provider/model into ~/.pi/agent/models.json (keeps other providers)",
+    )
+    p.add_argument(
+        "--no-install-pi-agent",
+        action="store_true",
+        help="Do not write Pi Agent models.json even if env enables it",
     )
     p.add_argument(
         "--print-config-only",
@@ -124,20 +144,35 @@ def main(argv: list[str] | None = None) -> None:
     if args.mcp_stdio:
         # Minimal bootstrap for key presence without binding HTTP
         if not settings.api_key.strip():
-            result = bootstrap_settings(settings, install_workbuddy=False, print_banner=False)
+            result = bootstrap_settings(
+                settings,
+                install_workbuddy=False,
+                install_opencode=False,
+                install_pi_agent=False,
+                print_banner=False,
+            )
             settings = result.settings
         _run_mcp_stdio(settings, args.database_path)
         return
 
-    install_wb: bool | None
-    if args.no_install_workbuddy:
-        install_wb = False
-    elif args.install_workbuddy:
-        install_wb = True
-    else:
-        install_wb = None  # follow env GROK_PROXY_INSTALL_WORKBUDDY
+    def _install_flag(yes: bool, no: bool) -> bool | None:
+        if no:
+            return False
+        if yes:
+            return True
+        return None  # follow env
 
-    result = bootstrap_settings(settings, install_workbuddy=install_wb, print_banner=True)
+    install_wb = _install_flag(args.install_workbuddy, args.no_install_workbuddy)
+    install_oc = _install_flag(args.install_opencode, args.no_install_opencode)
+    install_pi = _install_flag(args.install_pi_agent, args.no_install_pi_agent)
+
+    result = bootstrap_settings(
+        settings,
+        install_workbuddy=install_wb,
+        install_opencode=install_oc,
+        install_pi_agent=install_pi,
+        print_banner=True,
+    )
 
     if args.print_config_only:
         sys.exit(0)
