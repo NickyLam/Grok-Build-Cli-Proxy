@@ -70,20 +70,32 @@ def test_write_client_config_and_workbuddy_shape(tmp_path: Path):
         api_key="sk-gp-test",
         host="127.0.0.1",
         port=8787,
-        model_id="grok-build",
+        model_id="grok-4.5",
         source="generated",
     )
     written = write_client_config_files(info, state_dir=tmp_path)
     client = json.loads(written["client_config"].read_text())
     assert client["base_url"] == "http://127.0.0.1:8787/v1"
     assert client["api_key"] == "sk-gp-test"
-    assert client["model_id"] == "grok-build"
+    assert client["model_id"] == "grok-4.5"
+    assert client["supports_images"] is True
+    assert client["context_window"] >= 128_000
+    assert client["pi_agent"]["contextWindow"] == client["context_window"]
+    assert "image" in client["pi_agent"]["input"]
+    assert client["opencode"]["limit"]["context"] == client["context_window"]
+    assert "image" in client["opencode"]["modalities"]["input"]
 
     wb = json.loads(written["workbuddy_model"].read_text())
     assert wb["vendor"] == "Custom"
     assert wb["url"] == "http://127.0.0.1:8787/v1"
     assert wb["apiKey"] == "sk-gp-test"
-    assert wb["id"] == "grok-build"
+    assert wb["id"] == "grok-4.5"
+    assert wb["supportsImages"] is True
+    assert wb["supportsReasoning"] is True
+    assert wb["maxInputTokens"] == client["context_window"]
+    assert "reasoning" in wb
+    assert isinstance(wb["reasoning"]["supportedEfforts"], list)
+    assert wb["reasoning"]["supportedEfforts"]
 
 
 def test_install_workbuddy_upsert(tmp_path: Path):
@@ -155,3 +167,5 @@ def test_bootstrap_settings(tmp_path: Path, monkeypatch):
     assert result.settings.default_model == "grok-4.5"
     wb = json.loads((tmp_path / "workbuddy-model.json").read_text())
     assert wb["id"] == "grok-4.5"
+    assert wb["supportsImages"] is True
+    assert wb["maxInputTokens"] >= 128_000

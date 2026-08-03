@@ -19,7 +19,8 @@ from grok_proxy.backends.acp import select_backend
 from grok_proxy.bootstrap import bootstrap_settings
 from grok_proxy.concurrency import ConcurrencyGate, PerKeyConcurrencyTracker
 from grok_proxy.config import Settings, get_settings
-from grok_proxy.credentials import workbuddy_model_entry
+from grok_proxy.credentials import generic_client_config, workbuddy_model_entry
+from grok_proxy.model_resolve import get_model_capabilities
 from grok_proxy.errors import ProxyError, http_exception_handler, proxy_error_handler
 from grok_proxy.grok_runner import GrokResult, GrokRunner, map_usage
 from grok_proxy.mcp.server import McpToolRouter
@@ -178,7 +179,7 @@ def create_app(
                 pass
 
     app = FastAPI(
-        title="Grok Build CLI Proxy",
+        title="OpenGrokBuild",
         version=__version__,
         lifespan=lifespan,
     )
@@ -298,20 +299,37 @@ def create_app(
             )
         host = cfg.host if cfg.host not in ("0.0.0.0", "::") else "127.0.0.1"
         base_url = f"http://{host}:{cfg.port}/v1"
+        caps = get_model_capabilities(cfg.default_model)
+        client = generic_client_config(
+            api_key=cfg.api_key,
+            base_url=base_url,
+            model_id=cfg.default_model,
+            caps=caps,
+        )
         return {
             "base_url": base_url,
             "api_key": cfg.api_key,
             "model_id": cfg.default_model,
             "model": cfg.default_model,
             "models": cfg.model_ids(),
+            "context_window": caps.context_window,
+            "max_output_tokens": caps.max_output_tokens,
+            "supports_images": caps.supports_images,
+            "supports_reasoning": caps.supports_reasoning,
             "workbuddy": workbuddy_model_entry(
-                api_key=cfg.api_key, base_url=base_url, model_id=cfg.default_model
+                api_key=cfg.api_key,
+                base_url=base_url,
+                model_id=cfg.default_model,
+                caps=caps,
             ),
+            "client_config": client,
             "openai_sdk": {
                 "base_url": base_url,
                 "api_key": cfg.api_key,
                 "model": cfg.default_model,
             },
+            "pi_agent": client["pi_agent"],
+            "opencode": client["opencode"],
         }
 
     @app.get("/v1/models", response_model=ModelList)

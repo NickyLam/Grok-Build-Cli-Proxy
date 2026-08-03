@@ -9,6 +9,8 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from grok_proxy.model_resolve import ModelCapabilities, get_model_capabilities
+
 logger = logging.getLogger("grok_proxy")
 
 # Prefix helps humans recognize this is a local proxy key, not an xAI key.
@@ -59,18 +61,87 @@ def mask_api_key(key: str) -> str:
     return f"{key[:10]}…{key[-4:]}"
 
 
-def workbuddy_model_entry(*, api_key: str, base_url: str, model_id: str) -> dict:
+def workbuddy_model_entry(
+    *,
+    api_key: str,
+    base_url: str,
+    model_id: str,
+    caps: ModelCapabilities | None = None,
+) -> dict:
     """Model entry shape used by ~/.workbuddy/models.json (single source of truth)."""
-    return {
+    caps = caps or get_model_capabilities(model_id)
+    entry: dict = {
         "id": model_id,
-        "name": model_id,
+        "name": caps.display_name if caps.display_name != model_id else model_id,
         "vendor": "Custom",
         "url": base_url,
         "apiKey": api_key,
-        "supportsToolCall": False,
-        "supportsImages": False,
-        "supportsReasoning": False,
+        "supportsToolCall": caps.supports_tool_call,
+        "supportsImages": caps.supports_images,
+        "supportsReasoning": caps.supports_reasoning,
         "useCustomProtocol": False,
+        # WorkBuddy uses maxInputTokens as the context window for UI / budgeting.
+        "maxInputTokens": caps.context_window,
+    }
+    if caps.supports_reasoning and caps.reasoning_efforts:
+        entry["reasoning"] = {
+            "defaultEffort": caps.default_reasoning_effort or caps.reasoning_efforts[0],
+            "supportedEfforts": list(caps.reasoning_efforts),
+        }
+    return entry
+
+
+def generic_client_config(
+    *,
+    api_key: str,
+    base_url: str,
+    model_id: str,
+    caps: ModelCapabilities | None = None,
+) -> dict:
+    """OpenAI-compatible + per-client fragments (Pi Agent, OpenCode, …)."""
+    caps = caps or get_model_capabilities(model_id)
+    input_modalities = ["text"]
+    if caps.supports_images:
+        input_modalities.append("image")
+    return {
+        "provider": "openai-compatible",
+        "base_url": base_url,
+        "api_key": api_key,
+        "model": model_id,
+        "model_id": model_id,
+        "name": caps.display_name,
+        "context_window": caps.context_window,
+        "max_output_tokens": caps.max_output_tokens,
+        "supports_images": caps.supports_images,
+        "supports_reasoning": caps.supports_reasoning,
+        "supports_tool_call": caps.supports_tool_call,
+        "reasoning_efforts": list(caps.reasoning_efforts),
+        "default_reasoning_effort": caps.default_reasoning_effort,
+        "notes": (
+            "Use with OpenAI SDKs / WorkBuddy Custom models / OpenCode / Pi Agent. "
+            "Grok auth uses local `grok login` or XAI_API_KEY; this api_key is proxy-only. "
+            "context_window and supports_images are taken from Grok models cache when available."
+        ),
+        # Ready-to-paste fragments for popular clients
+        "pi_agent": {
+            "id": model_id,
+            "name": caps.display_name,
+            "reasoning": caps.supports_reasoning,
+            "input": input_modalities,
+            "contextWindow": caps.context_window,
+            "maxTokens": caps.max_output_tokens,
+        },
+        "opencode": {
+            "name": f"{caps.display_name} (Grok Build CLI)",
+            "limit": {
+                "context": caps.context_window,
+                "output": caps.max_output_tokens,
+            },
+            "modalities": {
+                "input": input_modalities,
+                "output": ["text"],
+            },
+        },
     }
 
 
@@ -184,18 +255,15 @@ def write_client_config_files(
     _chmod_private(cred_path)
     written["credentials"] = cred_path
 
-    # Generic OpenAI-compatible client config (any agent)
-    client = {
-        "provider": "openai-compatible",
-        "base_url": info.base_url,
-        "api_key": info.api_key,
-        "model": info.model_id,
-        "model_id": info.model_id,
-        "notes": (
-            "Use with OpenAI SDKs / WorkBuddy Custom models. "
-            "Grok auth uses local `grok login` or XAI_API_KEY; this api_key is proxy-only."
-        ),
-    }
+    caps = get_model_capabilities(info.model_id)
+
+    # Generic OpenAI-compatible client config (any agent) + Pi/OpenCode fragments
+    client = generic_client_config(
+        api_key=info.api_key,
+        base_url=info.base_url,
+        model_id=info.model_id,
+        caps=caps,
+    )
     client_path = state_dir / "client-config.json"
     client_path.write_text(json.dumps(client, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     _chmod_private(client_path)
@@ -203,7 +271,10 @@ def write_client_config_files(
 
     # WorkBuddy models.json entry shape (matches ~/.workbuddy/models.json)
     workbuddy_entry = workbuddy_model_entry(
-        api_key=info.api_key, base_url=info.base_url, model_id=info.model_id
+        api_key=info.api_key,
+        base_url=info.base_url,
+        model_id=info.model_id,
+        caps=caps,
     )
     wb_path = state_dir / "workbuddy-model.json"
     wb_path.write_text(
@@ -311,7 +382,7 @@ def format_startup_banner(
     lines = [
         "",
         "=" * 60,
-        "  Grok Build CLI Proxy is ready (OpenAI-compatible)",
+        "  OpenGrokBuild is ready (OpenAI-compatible)",
         "=" * 60,
         f"  Base URL : {info.base_url}",
         f"  API Key  : {display_key}",

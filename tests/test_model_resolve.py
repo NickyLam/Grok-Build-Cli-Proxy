@@ -5,6 +5,7 @@ from pathlib import Path
 
 from grok_proxy.model_resolve import (
     RuntimeModels,
+    get_model_capabilities,
     load_models_from_cache,
     resolve_request_model,
     resolve_runtime_models,
@@ -54,3 +55,47 @@ def test_resolve_runtime_treats_grok_build_as_auto(monkeypatch, tmp_path: Path):
     )
     assert rt.default_model == "grok-4.5"
     assert "grok-4.5" in rt.available
+
+
+def test_get_model_capabilities_from_cache(tmp_path: Path, monkeypatch):
+    cache = tmp_path / "models_cache.json"
+    cache.write_text(
+        json.dumps(
+            {
+                "models": {
+                    "grok-4.5": {
+                        "info": {
+                            "id": "grok-4.5",
+                            "name": "Grok 4.5",
+                            "context_window": 500_000,
+                            "max_completion_tokens": None,
+                            "supports_reasoning_effort": True,
+                            "reasoning_effort": "high",
+                            "reasoning_efforts": [
+                                {"id": "high", "value": "high", "default": True},
+                                {"id": "medium", "value": "medium"},
+                                {"id": "low", "value": "low"},
+                            ],
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GROK_HOME", str(tmp_path))
+    caps = get_model_capabilities("grok-4.5", cache_path=cache)
+    assert caps.context_window == 500_000
+    assert caps.supports_images is True
+    assert caps.supports_reasoning is True
+    assert caps.default_reasoning_effort == "high"
+    assert list(caps.reasoning_efforts) == ["high", "medium", "low"]
+    assert caps.max_output_tokens > 0
+    assert caps.source == "cache"
+
+
+def test_get_model_capabilities_known_fallback():
+    caps = get_model_capabilities("grok-4.5", cache_path=Path("/nonexistent/models_cache.json"))
+    assert caps.context_window == 500_000
+    assert caps.supports_images is True
+    assert caps.supports_reasoning is True

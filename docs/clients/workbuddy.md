@@ -10,6 +10,17 @@ uv run grok-proxy --install-workbuddy
 
 This upserts an entry into `~/.workbuddy/models.json` from `~/.grok-proxy/workbuddy-model.json`.
 
+The generated entry enables:
+
+| Field | Typical value (`grok-4.5`) | Meaning |
+|-------|---------------------------|---------|
+| `supportsImages` | `true` | Allow image attachments in the UI |
+| `supportsReasoning` | `true` | Expose reasoning effort controls |
+| `maxInputTokens` | `500000` | Context window (from Grok models cache) |
+| `reasoning.supportedEfforts` | `high` / `medium` / `low` | Available effort levels |
+
+Re-run `--install-workbuddy` after upgrading the proxy so WorkBuddy picks up these fields.
+
 ## Manual UI setup
 
 1. Start the proxy: `uv run grok-proxy`

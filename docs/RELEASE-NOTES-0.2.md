@@ -1,6 +1,6 @@
 # Release Notes — v0.2.0
 
-**Grok Build CLI Proxy** becomes a local **Agent Gateway**.
+**OpenGrokBuild** becomes a local **Agent Gateway**.
 
 ## Highlights
 

@@ -50,7 +50,7 @@ class ResponseOrchestrator:
         workspace: WorkspaceManager | None = None,
         permissions: PermissionBroker | None = None,
         process_manager: ProcessManager | None = None,
-        max_concurrent: int = 2,
+        max_concurrent: int = 10,
         gate: ConcurrencyGate | None = None,
         per_key_gate: PerKeyConcurrencyTracker | None = None,
     ) -> None:

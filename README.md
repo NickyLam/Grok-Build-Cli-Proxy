@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="Grok Build CLI Proxy — local OpenAI-compatible Agent Gateway for Grok Build">
+  <img src="./assets/readme/hero.svg" width="100%" alt="OpenGrokBuild — local OpenAI-compatible Agent Gateway for Grok Build">
 </p>
 
 <p align="center">
@@ -32,7 +32,7 @@
 **Requirements:** Python **3.11+** · [Grok Build CLI](https://x.ai) on `PATH` (or `GROK_BIN`) · authenticated (`grok login` or `XAI_API_KEY`)
 
 ```bash
-cd Grok-Build-Cli-Proxy
+cd OpenGrokBuild
 uv sync --all-extras
 
 # API key is auto-generated on first start (~/.grok-proxy/)
@@ -265,7 +265,7 @@ uv run grok-proxy
 export GROK_PROXY_API_KEY="$(cat ~/.grok-proxy/api_key)"
 
 # MCP command (prefer absolute venv binary)
-/absolute/path/to/Grok-Build-Cli-Proxy/.venv/bin/grok-proxy --mcp-stdio
+/absolute/path/to/OpenGrokBuild/.venv/bin/grok-proxy --mcp-stdio
 ```
 
 > **HTTP-mode tip:** `/v1/chat/completions` runs a *coding agent*. When the client cannot send `cwd`, the gateway uses `GROK_PROXY_DEFAULT_CWD` (or the directory the proxy was started from). Raise the client's request timeout — agent runs take minutes, not seconds.
@@ -277,7 +277,9 @@ export GROK_PROXY_API_KEY="$(cat ~/.grok-proxy/api_key)"
 uv run grok-proxy --install-workbuddy   # upserts ~/.workbuddy/models.json and starts the gateway
 ```
 
-Or add a Custom model from `~/.grok-proxy/workbuddy-model.json`:
+Writes a Custom model entry with **image input**, **reasoning**, and **context window** from the Grok models cache (e.g. `maxInputTokens: 500000` for `grok-4.5`). See `~/.grok-proxy/workbuddy-model.json`.
+
+Or add a Custom model from that file:
 **url** = `http://127.0.0.1:8787/v1`, **apiKey** = contents of `~/.grok-proxy/api_key`,
 **id** = `grok-4.5` (a real id from `grok models`, not the legacy alias `grok-build`).
 Restart / refresh WorkBuddy models afterwards.
@@ -293,7 +295,7 @@ Settings → MCP → Add server (stdio):
 {
   "mcpServers": {
     "grok": {
-      "command": "/absolute/path/to/Grok-Build-Cli-Proxy/.venv/bin/grok-proxy",
+      "command": "/absolute/path/to/OpenGrokBuild/.venv/bin/grok-proxy",
       "args": ["--mcp-stdio"]
     }
   }
@@ -311,7 +313,7 @@ Qoder lists 7 tools. `grok_consult` / `grok_review` are read-only; `grok_delegat
 
 ```toml
 [mcp_servers.grok]
-command = "/absolute/path/to/Grok-Build-Cli-Proxy/.venv/bin/grok-proxy"
+command = "/absolute/path/to/OpenGrokBuild/.venv/bin/grok-proxy"
 args = ["--mcp-stdio"]
 ```
 
@@ -348,13 +350,19 @@ Project `opencode.json` (or `~/.config/opencode/opencode.json`):
         "apiKey": "{env:GROK_PROXY_API_KEY}"
       },
       "models": {
-        "grok-4.5": { "name": "Grok 4.5 (Grok Build CLI)" }
+        "grok-4.5": {
+          "name": "Grok 4.5 (Grok Build CLI)",
+          "limit": { "context": 500000, "output": 65536 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        }
       }
     }
   },
   "model": "grok-proxy/grok-4.5"
 }
 ```
+
+Copy `limit` / `modalities` from `~/.grok-proxy/client-config.json` → `opencode` after the proxy starts (values track the live Grok models cache).
 
 Since the gateway is itself a full agent, a lightweight OpenCode agent/mode (few or no local tools) works best — let Grok do the editing.
 
@@ -374,7 +382,14 @@ Since the gateway is itself a full agent, a lightweight OpenCode agent/mode (few
       "apiKey": "sk-gp-…",
       "compat": { "supportsDeveloperRole": false },
       "models": [
-        { "id": "grok-4.5", "contextWindow": 131072, "maxTokens": 16384 }
+        {
+          "id": "grok-4.5",
+          "name": "Grok 4.5",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 500000,
+          "maxTokens": 65536
+        }
       ]
     }
   }
@@ -453,7 +468,7 @@ Do **not** expose this to the public internet without extra controls. Full notes
 | `GROK_PROXY_BACKEND` | `headless` | `headless` · `acp` · `auto` |
 | `GROK_PROXY_DATABASE_PATH` | `~/.grok-proxy/gateway.db` | SQLite |
 | `GROK_PROXY_CWD_ALLOWLIST` | empty | Allowed workspace prefixes |
-| `GROK_PROXY_MAX_CONCURRENT` | `2` | Global parallel runs |
+| `GROK_PROXY_MAX_CONCURRENT` | `10` | Global parallel runs |
 | `GROK_PROXY_DEFAULT_TIMEOUT_SEC` | `600` | Per-request timeout |
 | `GROK_PROXY_DEFAULT_WORKSPACE_MODE` | `read_only` | Default workspace mode |
 | `GROK_PROXY_ALLOW_IN_PLACE` | `false` | Allow source cwd mutation |

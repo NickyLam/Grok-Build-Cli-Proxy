@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="Grok Build CLI Proxy — 面向 Grok Build 的本地 OpenAI 兼容 Agent 网关">
+  <img src="./assets/readme/hero.svg" width="100%" alt="OpenGrokBuild — 面向 Grok Build 的本地 OpenAI 兼容 Agent 网关">
 </p>
 
 <p align="center">
@@ -32,7 +32,7 @@
 **环境要求：** Python **3.11+** · [Grok Build CLI](https://x.ai) 在 `PATH` 上（或设置 `GROK_BIN`）· 已登录（`grok login` 或 `XAI_API_KEY`）
 
 ```bash
-cd Grok-Build-Cli-Proxy
+cd OpenGrokBuild
 uv sync --all-extras
 
 # 首次启动会自动生成 API Key（~/.grok-proxy/）
@@ -265,7 +265,7 @@ uv run grok-proxy
 export GROK_PROXY_API_KEY="$(cat ~/.grok-proxy/api_key)"
 
 # MCP 命令（优先使用绝对路径的 venv 二进制）
-/absolute/path/to/Grok-Build-Cli-Proxy/.venv/bin/grok-proxy --mcp-stdio
+/absolute/path/to/OpenGrokBuild/.venv/bin/grok-proxy --mcp-stdio
 ```
 
 > **HTTP 模式提示：** `/v1/chat/completions` 跑的是 *coding agent*。客户端无法传 `cwd` 时，网关使用 `GROK_PROXY_DEFAULT_CWD`（或启动代理时的当前目录）。请把客户端请求超时调大——Agent 运行是分钟级，不是秒级。
@@ -277,7 +277,9 @@ export GROK_PROXY_API_KEY="$(cat ~/.grok-proxy/api_key)"
 uv run grok-proxy --install-workbuddy   # 写入 ~/.workbuddy/models.json 并启动网关
 ```
 
-或从 `~/.grok-proxy/workbuddy-model.json` 手动添加自定义模型：
+会写入带 **图片输入**、**推理** 和 **上下文窗口** 的 Custom 模型项（数据来自 Grok models cache，例如 `grok-4.5` 的 `maxInputTokens: 500000`）。详见 `~/.grok-proxy/workbuddy-model.json`。
+
+或从该文件手动添加自定义模型：
 **url** = `http://127.0.0.1:8787/v1`，**apiKey** = `~/.grok-proxy/api_key` 内容，
 **id** = `grok-4.5`（来自 `grok models` 的真实 id，不是旧别名 `grok-build`）。
 完成后重启 / 刷新 WorkBuddy 模型列表。
@@ -293,7 +295,7 @@ uv run grok-proxy --install-workbuddy   # 写入 ~/.workbuddy/models.json 并启
 {
   "mcpServers": {
     "grok": {
-      "command": "/absolute/path/to/Grok-Build-Cli-Proxy/.venv/bin/grok-proxy",
+      "command": "/absolute/path/to/OpenGrokBuild/.venv/bin/grok-proxy",
       "args": ["--mcp-stdio"]
     }
   }
@@ -311,7 +313,7 @@ Qoder 会列出 7 个工具。`grok_consult` / `grok_review` 为只读；`grok_d
 
 ```toml
 [mcp_servers.grok]
-command = "/absolute/path/to/Grok-Build-Cli-Proxy/.venv/bin/grok-proxy"
+command = "/absolute/path/to/OpenGrokBuild/.venv/bin/grok-proxy"
 args = ["--mcp-stdio"]
 ```
 
@@ -348,13 +350,19 @@ wire_api = "chat"
         "apiKey": "{env:GROK_PROXY_API_KEY}"
       },
       "models": {
-        "grok-4.5": { "name": "Grok 4.5 (Grok Build CLI)" }
+        "grok-4.5": {
+          "name": "Grok 4.5 (Grok Build CLI)",
+          "limit": { "context": 500000, "output": 65536 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        }
       }
     }
   },
   "model": "grok-proxy/grok-4.5"
 }
 ```
+
+`limit` / `modalities` 可在代理启动后从 `~/.grok-proxy/client-config.json` 的 `opencode` 字段复制（会跟随 Grok models cache）。
 
 网关本身已是完整 Agent，OpenCode 侧用轻量 agent/mode（少本地工具或不用）效果更好——让 Grok 负责编辑。
 
@@ -374,7 +382,14 @@ wire_api = "chat"
       "apiKey": "sk-gp-…",
       "compat": { "supportsDeveloperRole": false },
       "models": [
-        { "id": "grok-4.5", "contextWindow": 131072, "maxTokens": 16384 }
+        {
+          "id": "grok-4.5",
+          "name": "Grok 4.5",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 500000,
+          "maxTokens": 65536
+        }
       ]
     }
   }
@@ -453,7 +468,7 @@ curl -s -X POST "http://127.0.0.1:8787/v1/permissions/<id>/decision" \
 | `GROK_PROXY_BACKEND` | `headless` | `headless` · `acp` · `auto` |
 | `GROK_PROXY_DATABASE_PATH` | `~/.grok-proxy/gateway.db` | SQLite |
 | `GROK_PROXY_CWD_ALLOWLIST` | 空 | 允许的工作区前缀 |
-| `GROK_PROXY_MAX_CONCURRENT` | `2` | 全局并行数 |
+| `GROK_PROXY_MAX_CONCURRENT` | `10` | 全局并行数 |
 | `GROK_PROXY_DEFAULT_TIMEOUT_SEC` | `600` | 单请求超时 |
 | `GROK_PROXY_DEFAULT_WORKSPACE_MODE` | `read_only` | 默认工作区模式 |
 | `GROK_PROXY_ALLOW_IN_PLACE` | `false` | 是否允许修改源目录 |

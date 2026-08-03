@@ -23,6 +23,50 @@ MODEL_ALIASES = frozenset(
 
 FALLBACK_MODEL = "grok-4.5"
 
+# When cache omits max_completion_tokens, use a coding-agent friendly default.
+DEFAULT_MAX_OUTPUT_TOKENS = 65_536
+
+# Hard-coded fallbacks when ~/.grok/models_cache.json is missing or incomplete.
+# Prefer cache values at runtime; these keep client configs usable offline.
+_KNOWN_MODEL_CAPS: dict[str, dict[str, object]] = {
+    "grok-4.5": {
+        "display_name": "Grok 4.5",
+        "context_window": 500_000,
+        "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
+        "supports_images": True,
+        "supports_reasoning": True,
+        "reasoning_efforts": ["high", "medium", "low"],
+        "default_reasoning_effort": "high",
+    },
+    "grok-build-0.1": {
+        "display_name": "Grok Build 0.1",
+        "context_window": 256_000,
+        "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
+        "supports_images": True,
+        "supports_reasoning": True,
+        "reasoning_efforts": ["high", "medium", "low"],
+        "default_reasoning_effort": "high",
+    },
+}
+
+
+@dataclass(frozen=True)
+class ModelCapabilities:
+    """Client-facing model metadata (context window, modalities, reasoning)."""
+
+    model_id: str
+    display_name: str
+    context_window: int
+    max_output_tokens: int
+    supports_images: bool
+    supports_reasoning: bool
+    # OpenAI-style client tool calling is not the proxy's primary surface
+    # (the gateway itself is the agent). Keep False for WorkBuddy etc.
+    supports_tool_call: bool = False
+    reasoning_efforts: tuple[str, ...] = ()
+    default_reasoning_effort: str | None = None
+    source: str = "fallback"  # cache | known | fallback
+
 
 @dataclass
 class RuntimeModels:
@@ -36,6 +80,145 @@ def _grok_home() -> Path:
     if env:
         return Path(env).expanduser()
     return Path.home() / ".grok"
+
+
+def _read_models_cache_obj(cache_path: Path | None = None) -> dict[str, object] | None:
+    path = cache_path or (_grok_home() / "models_cache.json")
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("Failed to read models cache %s: %s", path, e)
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _caps_from_info(model_id: str, info: dict[str, object], *, source: str) -> ModelCapabilities:
+    known = _KNOWN_MODEL_CAPS.get(model_id, {})
+    display = str(info.get("name") or known.get("display_name") or model_id)
+
+    ctx_raw = info.get("context_window")
+    if isinstance(ctx_raw, (int, float)) and int(ctx_raw) > 0:
+        context_window = int(ctx_raw)
+    else:
+        context_window = int(known.get("context_window") or 128_000)
+
+    out_raw = info.get("max_completion_tokens")
+    if isinstance(out_raw, (int, float)) and int(out_raw) > 0:
+        max_output = int(out_raw)
+    else:
+        max_output = int(known.get("max_output_tokens") or DEFAULT_MAX_OUTPUT_TOKENS)
+
+    efforts: list[str] = []
+    raw_efforts = info.get("reasoning_efforts")
+    if isinstance(raw_efforts, list):
+        for item in raw_efforts:
+            if isinstance(item, dict):
+                val = item.get("value") or item.get("id")
+                if val:
+                    efforts.append(str(val))
+            elif isinstance(item, str) and item.strip():
+                efforts.append(item.strip())
+    if not efforts:
+        known_efforts = known.get("reasoning_efforts")
+        if isinstance(known_efforts, list):
+            efforts = [str(x) for x in known_efforts]
+
+    default_effort: str | None = None
+    if isinstance(info.get("reasoning_effort"), str) and info["reasoning_effort"]:
+        default_effort = str(info["reasoning_effort"])
+    elif efforts:
+        # Prefer explicit default flag in cache
+        if isinstance(raw_efforts, list):
+            for item in raw_efforts:
+                if isinstance(item, dict) and item.get("default"):
+                    default_effort = str(item.get("value") or item.get("id") or efforts[0])
+                    break
+        if not default_effort:
+            known_default = known.get("default_reasoning_effort")
+            default_effort = str(known_default) if known_default else efforts[0]
+
+    supports_reasoning = bool(
+        info.get("supports_reasoning_effort")
+        if "supports_reasoning_effort" in info
+        else (known.get("supports_reasoning", bool(efforts)))
+    )
+    # Grok multimodal models accept images; cache does not always expose a flag.
+    if "supports_images" in info:
+        supports_images = bool(info.get("supports_images"))
+    else:
+        supports_images = bool(known.get("supports_images", True))
+
+    return ModelCapabilities(
+        model_id=model_id,
+        display_name=display,
+        context_window=context_window,
+        max_output_tokens=max_output,
+        supports_images=supports_images,
+        supports_reasoning=supports_reasoning,
+        supports_tool_call=False,
+        reasoning_efforts=tuple(efforts),
+        default_reasoning_effort=default_effort if supports_reasoning else None,
+        source=source,
+    )
+
+
+def get_model_capabilities(
+    model_id: str,
+    *,
+    cache_path: Path | None = None,
+) -> ModelCapabilities:
+    """Resolve context window / modalities for client config generation.
+
+    Priority: models_cache.json info → known table → conservative fallback.
+    """
+    mid = (model_id or "").strip() or FALLBACK_MODEL
+    data = _read_models_cache_obj(cache_path)
+    if data:
+        models_obj = data.get("models") or {}
+        if isinstance(models_obj, dict):
+            meta = models_obj.get(mid)
+            if isinstance(meta, dict):
+                info = meta.get("info") if isinstance(meta.get("info"), dict) else meta
+                if isinstance(info, dict) and info:
+                    return _caps_from_info(mid, info, source="cache")
+
+    if mid in _KNOWN_MODEL_CAPS:
+        known = _KNOWN_MODEL_CAPS[mid]
+        return ModelCapabilities(
+            model_id=mid,
+            display_name=str(known.get("display_name") or mid),
+            context_window=int(known.get("context_window") or 128_000),
+            max_output_tokens=int(known.get("max_output_tokens") or DEFAULT_MAX_OUTPUT_TOKENS),
+            supports_images=bool(known.get("supports_images", True)),
+            supports_reasoning=bool(known.get("supports_reasoning", False)),
+            supports_tool_call=False,
+            reasoning_efforts=tuple(str(x) for x in (known.get("reasoning_efforts") or [])),  # type: ignore[arg-type]
+            default_reasoning_effort=(
+                str(known["default_reasoning_effort"])
+                if known.get("default_reasoning_effort")
+                else None
+            ),
+            source="known",
+        )
+
+    # Unknown model: still advertise multimodal + a usable window so clients
+    # do not default to tiny limits; CLI will reject truly invalid ids.
+    return ModelCapabilities(
+        model_id=mid,
+        display_name=mid,
+        context_window=128_000,
+        max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+        supports_images=True,
+        supports_reasoning=True,
+        supports_tool_call=False,
+        reasoning_efforts=("high", "medium", "low"),
+        default_reasoning_effort="high",
+        source="fallback",
+    )
 
 
 def load_models_from_cache(cache_path: Path | None = None) -> RuntimeModels | None:

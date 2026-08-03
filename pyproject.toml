@@ -1,11 +1,11 @@
 [project]
-name = "grok-build-cli-proxy"
+name = "opengrokbuild"
 version = "0.2.0"
-description = "OpenAI-compatible Agent Gateway for Grok Build CLI (Responses API, ACP, MCP)"
+description = "OpenGrokBuild — OpenAI-compatible Agent Gateway for Grok Build CLI (Responses API, ACP, MCP)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Grok Build CLI Proxy" }]
+authors = [{ name = "OpenGrokBuild" }]
 dependencies = [
   "fastapi>=0.115.0",
   "uvicorn[standard]>=0.32.0",

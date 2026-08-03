@@ -55,7 +55,7 @@ class Settings(BaseSettings):
         validation_alias=_alias("GROK_PROXY_CWD_ALLOWLIST", "cwd_allowlist"),
     )
     max_concurrent: int = Field(
-        default=2,
+        default=10,
         validation_alias=_alias("GROK_PROXY_MAX_CONCURRENT", "max_concurrent"),
     )
     default_timeout_sec: int = Field(

@@ -32,7 +32,7 @@ Exact Codex config keys evolve; use the pattern below and adapt to your Codex ve
 # Example shape for ~/.codex/config.toml or project config
 [mcp_servers.grok_proxy]
 command = "uv"
-args = ["run", "--directory", "/absolute/path/to/Grok-Build-Cli-Proxy", "grok-proxy", "--mcp-stdio"]
+args = ["run", "--directory", "/absolute/path/to/OpenGrokBuild", "grok-proxy", "--mcp-stdio"]
 # env if needed:
 # env = { GROK_BIN = "/Users/you/.grok/bin/grok", GROK_PROXY_BACKEND = "headless" }
 ```
@@ -43,7 +43,7 @@ args = ["run", "--directory", "/absolute/path/to/Grok-Build-Cli-Proxy", "grok-pr
 #!/usr/bin/env bash
 # scripts/mcp-grok-proxy.sh
 set -euo pipefail
-cd /absolute/path/to/Grok-Build-Cli-Proxy
+cd /absolute/path/to/OpenGrokBuild
 exec uv run grok-proxy --mcp-stdio
 ```
 

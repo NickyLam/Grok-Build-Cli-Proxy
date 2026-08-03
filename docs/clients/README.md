@@ -1,6 +1,6 @@
 # Client integration guide
 
-How to connect popular clients to **Grok Build CLI Proxy** (v0.2).
+How to connect popular clients to **OpenGrokBuild** (v0.2).
 
 ## Prerequisites
 
@@ -9,7 +9,7 @@ How to connect popular clients to **Grok Build CLI Proxy** (v0.2).
 grok login   # or: export XAI_API_KEY=...
 
 # 2. Start the gateway
-cd Grok-Build-Cli-Proxy
+cd OpenGrokBuild
 uv sync --all-extras
 uv run grok-proxy
 ```
